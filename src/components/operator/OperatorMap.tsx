@@ -1,4 +1,5 @@
 import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { ALL_SUBSCRIBER_FILTERS } from '../../utils/filterPresets'
 import {
   CELLS,
   cellById,
@@ -6,6 +7,7 @@ import {
   neighborSet,
   subscriberFootprint,
   type Cell,
+  type SubscriberGlobalFilters,
 } from '../../data/placeholderNetwork'
 
 type MapMode = 'all' | 'cellFocus' | 'subscriberFocus'
@@ -19,6 +21,8 @@ type Props = {
   showHoverKpis: boolean
   /** Compact embedded map (subscriber session view) */
   embed?: 'full' | 'compact'
+  /** Global filters for map tooltips (must match cell table / drill-down). */
+  subscriberGlobalFilters?: SubscriberGlobalFilters
   onCellSelect?: (cellId: string) => void
 }
 
@@ -82,10 +86,12 @@ export function OperatorMap({
   subscriberImsi,
   showHoverKpis: _showHoverKpis,
   embed = 'full',
+  subscriberGlobalFilters,
   onCellSelect,
 }: Props) {
   void _showHoverKpis
   const compact = embed === 'compact'
+  const filters = subscriberGlobalFilters ?? ALL_SUBSCRIBER_FILTERS
 
   const svgRef = useRef<SVGSVGElement>(null)
   const shellRef = useRef<HTMLDivElement>(null)
@@ -336,7 +342,7 @@ export function OperatorMap({
 
           {CELLS.map((c) => {
             const lyr = layer(c.id)
-            const title = mapCellSummaryLines(c).join('\n')
+            const title = mapCellSummaryLines(c, filters).join('\n')
             const selected =
               mode === 'cellFocus' && selectedCellId === c.id ? ' map-cell--selected' : ''
             return (
@@ -382,7 +388,7 @@ export function OperatorMap({
             role="tooltip"
           >
             <ul className="map-hover-list">
-              {mapCellSummaryLines(hover.cell).map((line, i) => (
+              {mapCellSummaryLines(hover.cell, filters).map((line, i) => (
                 <li key={`${hover.cell.id}-${i}`}>{line}</li>
               ))}
             </ul>

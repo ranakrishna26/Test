@@ -9,4 +9,10 @@ const GITHUB_PAGES_BASE = '/Test/'
 export default defineConfig(({ command }) => ({
   plugins: [react()],
   base: command === 'build' ? GITHUB_PAGES_BASE : '/',
+  server: {
+    port: 5173,
+    strictPort: false,
+    /** Helps when `localhost` fails; terminal will also show a Network URL to try. */
+    host: true,
+  },
 }))

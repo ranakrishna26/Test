@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Bar,
   BarChart,
@@ -16,6 +16,7 @@ import {
 import {
   SUBSCRIBERS,
   aggregateKpiFromSessions,
+  applyGlobalSubscriberFilters,
   cellTableCallDropMetrics,
   cellTableFailureMetrics,
   cellTableHoPctMetrics,
@@ -32,6 +33,7 @@ import {
   subscribersForFootprint,
   tabHeadlineLabel,
   type ComparePeriodOption,
+  type SubscriberGlobalFilters,
   type TableTab,
 } from '../../data/placeholderNetwork'
 import { GlobalFiltersBar } from './GlobalFiltersBar'
@@ -59,26 +61,39 @@ function matchImsi(q: string, imsi: string): boolean {
   return imsi.replace(/\s/g, '').toLowerCase().includes(n)
 }
 
-function CellMetricWithImpact({
-  primary,
+/** Filtered footprint cohort: with issue / cohort size; 0/0 when filters exclude everyone; em dash when no anchored subs. */
+function CellFootprintRatio({
   affected,
   total,
-  showRatio,
+  fromAnchors,
+  noMatchTooltip,
+  ranTooltip,
 }: {
-  primary: ReactNode
   affected: number
   total: number
-  showRatio: boolean
+  fromAnchors: boolean
+  noMatchTooltip: string
+  ranTooltip: string
 }) {
-  return (
-    <span className="metric-with-impact">
-      <span className="metric-with-impact__primary">{primary}</span>
-      {showRatio && total > 0 && (
-        <span className="metric-with-impact__context">
-          {' '}
+  if (fromAnchors) {
+    const cohortTooltip =
+      total === 0
+        ? noMatchTooltip
+        : `With issue / in cohort (after global filters): ${affected} subscriber${
+            affected === 1 ? '' : 's'
+          } with this issue, ${total} in the footprint cohort.`
+    return (
+      <span className="metric-with-impact" title={cohortTooltip}>
+        <span className="metric-with-impact__primary">
           {affected}/{total}
         </span>
-      )}
+        <span className="muted"> subs</span>
+      </span>
+    )
+  }
+  return (
+    <span className="metric-with-impact" title={ranTooltip}>
+      <span className="muted">—</span>
     </span>
   )
 }
@@ -121,15 +136,36 @@ export function OperatorDashboard() {
   const [customRangeStart, setCustomRangeStart] = useState('')
   const [customRangeEnd, setCustomRangeEnd] = useState('')
 
-  const ranked = useMemo(() => rankedCells(activeTab), [activeTab])
+  const subscriberGlobalFilters: SubscriberGlobalFilters = useMemo(
+    () => ({
+      timeRange,
+      subscriberType,
+      deviceType,
+    }),
+    [timeRange, subscriberType, deviceType],
+  )
+
+  const ranked = useMemo(
+    () => rankedCells(activeTab, subscriberGlobalFilters),
+    [activeTab, subscriberGlobalFilters],
+  )
+
+  const visibleRanked = useMemo(() => {
+    const q = cellAttributes.trim().toLowerCase()
+    if (!q) return ranked
+    return ranked.filter(
+      (c) => c.name.toLowerCase().includes(q) || c.id.toLowerCase().includes(q),
+    )
+  }, [ranked, cellAttributes])
 
   const subscriberRows = useMemo(() => {
     if (!selectedCellId) return []
-    let rows = subscribersForFootprint(selectedCellId)
+    const base = subscribersForFootprint(selectedCellId)
+    let rows = applyGlobalSubscriberFilters(base, subscriberGlobalFilters)
     if (tableImsiSearch.trim())
       rows = rows.filter((s) => matchImsi(tableImsiSearch, s.imsi))
     return sortSubscribersByTab(rows, activeTab)
-  }, [selectedCellId, activeTab, tableImsiSearch])
+  }, [selectedCellId, activeTab, tableImsiSearch, subscriberGlobalFilters])
 
   const imsiQuickMatches = useMemo(() => {
     const q = tableImsiSearch.trim()
@@ -332,6 +368,12 @@ export function OperatorDashboard() {
                     </button>
                   ))}
                 </div>
+                <p className="context-line table-footprint-hint">
+                  Cell KPI columns show with issue / in cohort for the same filtered footprint as the
+                  subscriber list (this cell and neighbours; time range, subscriber type, and device
+                  type above). The denominator is cohort size, not a second “bad” count. IMSI search
+                  only filters the subscriber table.
+                </p>
                 <div className="table-scroll">
                   {activeTab === 'failure' && (
                     <table className="minimal-table">
@@ -339,22 +381,23 @@ export function OperatorDashboard() {
                         <tr>
                           <th>Cell name</th>
                           <th>Cell ID</th>
-                          <th>Setup / access failures</th>
+                          <th>With issue / in cohort</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {ranked.map((c) => {
-                          const m = cellTableFailureMetrics(c)
+                        {visibleRanked.map((c) => {
+                          const m = cellTableFailureMetrics(c, subscriberGlobalFilters)
                           return (
                             <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
                               <td>{c.name}</td>
                               <td className="muted">{c.id}</td>
                               <td>
-                                <CellMetricWithImpact
-                                  primary={`${m.value} ${m.value === 1 ? 'failure' : 'failures'}`}
+                                <CellFootprintRatio
                                   affected={m.affected}
                                   total={m.total}
-                                  showRatio={m.fromAnchors}
+                                  fromAnchors={m.fromAnchors}
+                                  noMatchTooltip="No subscribers match current global filters in this footprint."
+                                  ranTooltip={`No subscribers in this footprint for drill-down. RAN: ${c.setupAccessFailures} failures`}
                                 />
                               </td>
                             </tr>
@@ -369,22 +412,23 @@ export function OperatorDashboard() {
                         <tr>
                           <th>Cell name</th>
                           <th>Cell ID</th>
-                          <th>Call drops</th>
+                          <th>With issue / in cohort</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {ranked.map((c) => {
-                          const m = cellTableCallDropMetrics(c)
+                        {visibleRanked.map((c) => {
+                          const m = cellTableCallDropMetrics(c, subscriberGlobalFilters)
                           return (
                             <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
                               <td>{c.name}</td>
                               <td className="muted">{c.id}</td>
                               <td>
-                                <CellMetricWithImpact
-                                  primary={`${m.value} ${m.value === 1 ? 'drop' : 'drops'}`}
+                                <CellFootprintRatio
                                   affected={m.affected}
                                   total={m.total}
-                                  showRatio={m.fromAnchors}
+                                  fromAnchors={m.fromAnchors}
+                                  noMatchTooltip="No subscribers match current global filters in this footprint."
+                                  ranTooltip={`No subscribers in this footprint for drill-down. RAN: ${c.callDrops} drops`}
                                 />
                               </td>
                             </tr>
@@ -399,40 +443,34 @@ export function OperatorDashboard() {
                         <tr>
                           <th>Cell name</th>
                           <th>Cell ID</th>
-                          <th>DL throughput</th>
-                          <th>UL throughput</th>
+                          <th>DL: with issue / in cohort</th>
+                          <th>UL: with issue / in cohort</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {ranked.map((c) => {
-                          const dl = cellTablePayloadDlMetrics(c)
-                          const ul = cellTablePayloadUlMetrics(c)
-                          const dlMbps =
-                            Number.isInteger(dl.value) || dl.value % 1 === 0
-                              ? String(dl.value)
-                              : dl.value.toFixed(1)
-                          const ulMbps =
-                            Number.isInteger(ul.value) || ul.value % 1 === 0
-                              ? String(ul.value)
-                              : ul.value.toFixed(1)
+                        {visibleRanked.map((c) => {
+                          const dl = cellTablePayloadDlMetrics(c, subscriberGlobalFilters)
+                          const ul = cellTablePayloadUlMetrics(c, subscriberGlobalFilters)
                           return (
                             <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
                               <td>{c.name}</td>
                               <td className="muted">{c.id}</td>
                               <td>
-                                <CellMetricWithImpact
-                                  primary={`${dlMbps} Mbps`}
+                                <CellFootprintRatio
                                   affected={dl.affected}
                                   total={dl.total}
-                                  showRatio={dl.fromAnchors}
+                                  fromAnchors={dl.fromAnchors}
+                                  noMatchTooltip="No subscribers match current global filters in this footprint."
+                                  ranTooltip={`No subscribers in this footprint for drill-down. RAN DL: ${c.dlMbps} Mbps`}
                                 />
                               </td>
                               <td>
-                                <CellMetricWithImpact
-                                  primary={`${ulMbps} Mbps`}
+                                <CellFootprintRatio
                                   affected={ul.affected}
                                   total={ul.total}
-                                  showRatio={ul.fromAnchors}
+                                  fromAnchors={ul.fromAnchors}
+                                  noMatchTooltip="No subscribers match current global filters in this footprint."
+                                  ranTooltip={`No subscribers in this footprint for drill-down. RAN UL: ${c.ulMbps} Mbps`}
                                 />
                               </td>
                             </tr>
@@ -448,23 +486,24 @@ export function OperatorDashboard() {
                           <th>Cell name</th>
                           <th>Cell ID</th>
                           <th>Total handovers</th>
-                          <th>HO success %</th>
+                          <th>With issue / in cohort</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {ranked.map((c) => {
-                          const m = cellTableHoPctMetrics(c)
+                        {visibleRanked.map((c) => {
+                          const m = cellTableHoPctMetrics(c, subscriberGlobalFilters)
                           return (
                             <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
                               <td>{c.name}</td>
                               <td className="muted">{c.id}</td>
                               <td>{c.totalHandovers.toLocaleString()}</td>
                               <td>
-                                <CellMetricWithImpact
-                                  primary={`${m.value.toFixed(1)}%`}
+                                <CellFootprintRatio
                                   affected={m.affected}
                                   total={m.total}
-                                  showRatio={m.fromAnchors}
+                                  fromAnchors={m.fromAnchors}
+                                  noMatchTooltip="No subscribers match current global filters in this footprint."
+                                  ranTooltip={`No subscribers in this footprint for drill-down. RAN HO: ${c.hoSuccessPct.toFixed(1)}%`}
                                 />
                               </td>
                             </tr>
@@ -558,6 +597,7 @@ export function OperatorDashboard() {
                 subscriberImsi={selectedImsi}
                 showHoverKpis={view === 'sessions'}
                 embed={view === 'sessions' ? 'compact' : 'full'}
+                subscriberGlobalFilters={subscriberGlobalFilters}
                 onCellSelect={selectCellFromMap}
               />
             </div>

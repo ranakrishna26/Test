@@ -7,6 +7,18 @@ export type GlobalFilterSnapshot = {
   cellAttributes: string
 }
 
+/** Subset of global filters applied to subscriber cohorts (cell table, drill-down, map). */
+export type SubscriberGlobalFilters = Pick<
+  GlobalFilterSnapshot,
+  'timeRange' | 'subscriberType' | 'deviceType'
+>
+
+export const ALL_SUBSCRIBER_FILTERS: SubscriberGlobalFilters = {
+  timeRange: '24h',
+  subscriberType: 'all',
+  deviceType: 'all',
+}
+
 export type SavedFilterPreset = {
   id: string
   name: string

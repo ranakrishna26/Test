@@ -1,5 +1,10 @@
 /** Placeholder network model for operator dashboard prototype */
 
+import {
+  ALL_SUBSCRIBER_FILTERS,
+  type SubscriberGlobalFilters,
+} from '../utils/filterPresets'
+
 export type TableTab = 'failure' | 'callDrop' | 'payload' | 'handover'
 
 export interface Cell {
@@ -16,6 +21,10 @@ export interface Cell {
   neighborIds: string[]
 }
 
+export type SubscriberSegment = 'consumer' | 'enterprise' | 'iot' | 'vip'
+export type SubscriberDevice = 'phone' | 'cpe' | 'module'
+export type SubscriberTimeHorizon = '1h' | '24h' | '7d' | '30d'
+
 export interface Subscriber {
   imsi: string
   /** Primary / anchor cell for display */
@@ -27,6 +36,12 @@ export interface Subscriber {
   dlMbps: number
   ulMbps: number
   hoSuccessPct: number
+  /** Global filter: subscriber type (includes VIP) */
+  segment: SubscriberSegment
+  /** Global filter: device type */
+  device: SubscriberDevice
+  /** Metrics visible when selected time range is at least this long (synthetic). */
+  timeHorizon: SubscriberTimeHorizon
 }
 
 export interface SessionRow {
@@ -165,103 +180,157 @@ export function neighborSet(cellId: string): Set<string> {
   return new Set([cellId, ...c.neighborIds])
 }
 
-/** Subscribers associated with a cell footprint (cell + neighbors) */
-export const SUBSCRIBERS: Subscriber[] = [
-  {
-    imsi: '310410******891',
-    cellId: 'NR-1021',
-    cellName: 'Alpha-21',
-    sessions: 48,
-    setupAccessFailures: 14,
-    callDrops: 22,
-    dlMbps: 28,
-    ulMbps: 6.1,
-    hoSuccessPct: 82.0,
-  },
-  {
-    imsi: '310410******902',
-    cellId: 'NR-4103',
-    cellName: 'Delta-09',
-    sessions: 36,
-    setupAccessFailures: 11,
-    callDrops: 19,
-    dlMbps: 31,
-    ulMbps: 7.2,
-    hoSuccessPct: 84.5,
-  },
-  {
-    imsi: '310410******915',
-    cellId: 'NR-1021',
-    cellName: 'Alpha-21',
-    sessions: 52,
-    setupAccessFailures: 9,
-    callDrops: 31,
-    dlMbps: 22,
-    ulMbps: 5.0,
-    hoSuccessPct: 79.2,
-  },
-  {
-    imsi: '310410******928',
-    cellId: 'NR-8842',
-    cellName: 'Beta-14',
-    sessions: 24,
-    setupAccessFailures: 6,
-    callDrops: 8,
-    dlMbps: 58,
-    ulMbps: 13.0,
-    hoSuccessPct: 93.0,
-  },
-  {
-    imsi: '310410******934',
-    cellId: 'NR-4103',
-    cellName: 'Delta-09',
-    sessions: 41,
-    setupAccessFailures: 18,
-    callDrops: 12,
-    dlMbps: 40,
-    ulMbps: 9.5,
-    hoSuccessPct: 86.0,
-  },
-  {
-    imsi: '310410******941',
-    cellId: 'NR-6002',
-    cellName: 'Theta-08',
-    sessions: 19,
-    setupAccessFailures: 7,
-    callDrops: 15,
-    dlMbps: 26,
-    ulMbps: 6.8,
-    hoSuccessPct: 87.5,
-  },
-]
+/** ~320 subs per serving cell → ~2.5k total (deterministic, telecom-scale footprint). */
+const SUBSCRIBERS_PER_CELL = 320
+
+function mix32(n: number): number {
+  let x = n >>> 0
+  x ^= x << 13
+  x ^= x >>> 17
+  x ^= x << 5
+  return x >>> 0
+}
+
+function cellIdSalt(id: string): number {
+  let h = 2166136261
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return h >>> 0
+}
+
+function pickSegment(u: number): SubscriberSegment {
+  if (u < 0.04) return 'vip'
+  if (u < 0.74) return 'consumer'
+  if (u < 0.86) return 'enterprise'
+  return 'iot'
+}
+
+function pickDevice(u: number, segment: SubscriberSegment): SubscriberDevice {
+  if (segment === 'iot') return u < 0.85 ? 'module' : 'phone'
+  if (segment === 'enterprise') return u < 0.72 ? 'cpe' : 'phone'
+  if (u < 0.78) return 'phone'
+  if (u < 0.94) return 'cpe'
+  return 'module'
+}
+
+function pickTimeHorizon(u: number): SubscriberTimeHorizon {
+  if (u < 0.12) return '1h'
+  if (u < 0.52) return '24h'
+  if (u < 0.82) return '7d'
+  return '30d'
+}
+
+function buildPlaceholderSubscribers(): Subscriber[] {
+  const out: Subscriber[] = []
+  let seq = 0
+  for (const cell of CELLS) {
+    for (let slot = 0; slot < SUBSCRIBERS_PER_CELL; slot++) {
+      seq++
+      const seed = mix32(seq * 2654435761 ^ cellIdSalt(cell.id) ^ slot * 2246822519)
+      const u0 = (seed >>> 0) / 2 ** 32
+      const u1 = mix32(seed + 1) / 2 ** 32
+      const u2 = mix32(seed + 2) / 2 ** 32
+      const u3 = mix32(seed + 3) / 2 ** 32
+      const u4 = mix32(seed + 4) / 2 ** 32
+      const u5 = mix32(seed + 5) / 2 ** 32
+
+      const segment = pickSegment(u0)
+      const device = pickDevice(u1, segment)
+      const timeHorizon = pickTimeHorizon(u2)
+
+      const dlFactor = 0.48 + u3 * 0.52
+      let dlMbps = Math.round(cell.dlMbps * dlFactor * 10) / 10
+      if (u4 < 0.08) dlMbps = Math.max(8, Math.round(dlMbps * (0.35 + u5 * 0.45) * 10) / 10)
+      const ulMbps = Math.round(cell.ulMbps * (0.42 + u4 * 0.5) * 10) / 10
+
+      const failRoll = mix32(seed + 11) / 2 ** 32
+      const setupAccessFailures =
+        failRoll < 0.62 ? 0 : failRoll < 0.88 ? 1 + (mix32(seed + 12) % 6) : 7 + (mix32(seed + 13) % 14)
+
+      const dropRoll = mix32(seed + 21) / 2 ** 32
+      const callDrops =
+        dropRoll < 0.58 ? 0 : dropRoll < 0.9 ? 1 + (mix32(seed + 22) % 4) : 5 + (mix32(seed + 23) % 20)
+
+      const hoBase = cell.hoSuccessPct
+      const hoJitter = (mix32(seed + 31) % 700) / 100 - 3.5
+      let hoSuccessPct = Math.round((hoBase + hoJitter) * 10) / 10
+      hoSuccessPct = Math.max(72, Math.min(99.6, hoSuccessPct))
+
+      const sessions = 6 + (mix32(seed + 41) % 115)
+
+      out.push({
+        imsi: `310410******${String(seq).padStart(6, '0')}`,
+        cellId: cell.id,
+        cellName: cell.name,
+        sessions,
+        setupAccessFailures,
+        callDrops,
+        dlMbps,
+        ulMbps,
+        hoSuccessPct,
+        segment,
+        device,
+        timeHorizon,
+      })
+    }
+  }
+  return out
+}
+
+/** Subscribers associated with a cell footprint (cell + neighbours); large synthetic population per cell. */
+export const SUBSCRIBERS: Subscriber[] = buildPlaceholderSubscribers()
 
 export function subscribersForFootprint(cellId: string): Subscriber[] {
   const footprint = neighborSet(cellId)
   return SUBSCRIBERS.filter((s) => footprint.has(s.cellId))
 }
 
-/** Subscribers whose primary anchor cell is this cell (excludes neighbour-only rows). */
-export function subscribersOnCell(cellId: string): Subscriber[] {
-  return SUBSCRIBERS.filter((s) => s.cellId === cellId)
+const TIME_RANGE_ORDER: Record<SubscriberTimeHorizon, number> = {
+  '1h': 1,
+  '24h': 2,
+  '7d': 3,
+  '30d': 4,
+}
+
+function timeRangeCoversSubscriber(selected: string, sub: SubscriberTimeHorizon): boolean {
+  const oSel = TIME_RANGE_ORDER[selected as SubscriberTimeHorizon] ?? 2
+  const oSub = TIME_RANGE_ORDER[sub]
+  return oSel >= oSub
+}
+
+/** Same rules as cell table / subscriber drill-down (excludes IMSI search). */
+export function applyGlobalSubscriberFilters(
+  subs: Subscriber[],
+  f: SubscriberGlobalFilters,
+): Subscriber[] {
+  return subs.filter((s) => {
+    if (f.subscriberType !== 'all' && s.segment !== f.subscriberType) return false
+    if (f.deviceType !== 'all' && s.device !== f.deviceType) return false
+    if (!timeRangeCoversSubscriber(f.timeRange, s.timeHorizon)) return false
+    return true
+  })
 }
 
 /**
- * Cell-table headline + subscriber ratio, all from the same source when anchor
- * subscribers exist on that cell; otherwise headline uses RAN (Cell) totals
- * and no ratio is shown.
+ * Cell-table metrics: filtered footprint cohort matches drill-down (global filters only).
  */
 export type CellTableMetric = {
   value: number
   affected: number
   total: number
-  /** When true, `value` is derived from anchor subscribers (matches x/y). */
+  /** True when footprint has raw subs; total may be 0 if filters exclude everyone. */
   fromAnchors: boolean
 }
 
-/** Sum of setup/access failures across anchor subscribers; ratio = subs with any failures. */
-export function cellTableFailureMetrics(c: Cell): CellTableMetric {
-  const subs = subscribersOnCell(c.id)
-  if (!subs.length) {
+/** Sum of setup/access failures across filtered footprint subs. */
+export function cellTableFailureMetrics(
+  c: Cell,
+  f: SubscriberGlobalFilters = ALL_SUBSCRIBER_FILTERS,
+): CellTableMetric {
+  const raw = subscribersForFootprint(c.id)
+  if (!raw.length) {
     return {
       value: c.setupAccessFailures,
       affected: 0,
@@ -269,30 +338,46 @@ export function cellTableFailureMetrics(c: Cell): CellTableMetric {
       fromAnchors: false,
     }
   }
+  const subs = applyGlobalSubscriberFilters(raw, f)
+  if (!subs.length) {
+    return { value: 0, affected: 0, total: 0, fromAnchors: true }
+  }
   const value = subs.reduce((a, s) => a + s.setupAccessFailures, 0)
   const affected = subs.filter((s) => s.setupAccessFailures > 0).length
   return { value, affected, total: subs.length, fromAnchors: true }
 }
 
-/** Sum of call drops across anchor subscribers; ratio = subs with any drops. */
-export function cellTableCallDropMetrics(c: Cell): CellTableMetric {
-  const subs = subscribersOnCell(c.id)
-  if (!subs.length) {
+export function cellTableCallDropMetrics(
+  c: Cell,
+  f: SubscriberGlobalFilters = ALL_SUBSCRIBER_FILTERS,
+): CellTableMetric {
+  const raw = subscribersForFootprint(c.id)
+  if (!raw.length) {
     return { value: c.callDrops, affected: 0, total: 0, fromAnchors: false }
+  }
+  const subs = applyGlobalSubscriberFilters(raw, f)
+  if (!subs.length) {
+    return { value: 0, affected: 0, total: 0, fromAnchors: true }
   }
   const value = subs.reduce((a, s) => a + s.callDrops, 0)
   const affected = subs.filter((s) => s.callDrops > 0).length
   return { value, affected, total: subs.length, fromAnchors: true }
 }
 
-/** Worst DL among anchors vs RAN headline; ratio = subs below fraction of cell DL. */
 const PAYLOAD_DL_FRAC = 0.82
 const PAYLOAD_UL_FRAC = 0.82
 
-export function cellTablePayloadDlMetrics(c: Cell): CellTableMetric {
-  const subs = subscribersOnCell(c.id)
-  if (!subs.length) {
+export function cellTablePayloadDlMetrics(
+  c: Cell,
+  f: SubscriberGlobalFilters = ALL_SUBSCRIBER_FILTERS,
+): CellTableMetric {
+  const raw = subscribersForFootprint(c.id)
+  if (!raw.length) {
     return { value: c.dlMbps, affected: 0, total: 0, fromAnchors: false }
+  }
+  const subs = applyGlobalSubscriberFilters(raw, f)
+  if (!subs.length) {
+    return { value: 0, affected: 0, total: 0, fromAnchors: true }
   }
   const value = Math.min(...subs.map((s) => s.dlMbps))
   const threshold = c.dlMbps * PAYLOAD_DL_FRAC
@@ -300,10 +385,17 @@ export function cellTablePayloadDlMetrics(c: Cell): CellTableMetric {
   return { value, affected, total: subs.length, fromAnchors: true }
 }
 
-export function cellTablePayloadUlMetrics(c: Cell): CellTableMetric {
-  const subs = subscribersOnCell(c.id)
-  if (!subs.length) {
+export function cellTablePayloadUlMetrics(
+  c: Cell,
+  f: SubscriberGlobalFilters = ALL_SUBSCRIBER_FILTERS,
+): CellTableMetric {
+  const raw = subscribersForFootprint(c.id)
+  if (!raw.length) {
     return { value: c.ulMbps, affected: 0, total: 0, fromAnchors: false }
+  }
+  const subs = applyGlobalSubscriberFilters(raw, f)
+  if (!subs.length) {
+    return { value: 0, affected: 0, total: 0, fromAnchors: true }
   }
   const value = Math.min(...subs.map((s) => s.ulMbps))
   const threshold = c.ulMbps * PAYLOAD_UL_FRAC
@@ -311,11 +403,17 @@ export function cellTablePayloadUlMetrics(c: Cell): CellTableMetric {
   return { value, affected, total: subs.length, fromAnchors: true }
 }
 
-/** Worst HO% among anchors; ratio = subs below cell HO minus margin (capped). */
-export function cellTableHoPctMetrics(c: Cell): CellTableMetric {
-  const subs = subscribersOnCell(c.id)
-  if (!subs.length) {
+export function cellTableHoPctMetrics(
+  c: Cell,
+  f: SubscriberGlobalFilters = ALL_SUBSCRIBER_FILTERS,
+): CellTableMetric {
+  const raw = subscribersForFootprint(c.id)
+  if (!raw.length) {
     return { value: c.hoSuccessPct, affected: 0, total: 0, fromAnchors: false }
+  }
+  const subs = applyGlobalSubscriberFilters(raw, f)
+  if (!subs.length) {
+    return { value: 0, affected: 0, total: 0, fromAnchors: true }
   }
   const value = Math.min(...subs.map((s) => s.hoSuccessPct))
   const bar = Math.min(92.5, c.hoSuccessPct - 0.5)
@@ -371,19 +469,34 @@ export function cellsForSubscriber(imsi: string): Set<string> {
   return subscriberFootprint(imsi).all
 }
 
-export function rankedCells(tab: TableTab): Cell[] {
+export function rankedCells(
+  tab: TableTab,
+  f: SubscriberGlobalFilters = ALL_SUBSCRIBER_FILTERS,
+): Cell[] {
   const list = [...CELLS]
   if (tab === 'failure')
-    list.sort(
-      (a, b) => cellTableFailureMetrics(b).value - cellTableFailureMetrics(a).value,
-    )
+    list.sort((a, b) => {
+      const ma = cellTableFailureMetrics(a, f)
+      const mb = cellTableFailureMetrics(b, f)
+      if (mb.affected !== ma.affected) return mb.affected - ma.affected
+      return mb.value - ma.value
+    })
   else if (tab === 'callDrop')
-    list.sort((a, b) => cellTableCallDropMetrics(b).value - cellTableCallDropMetrics(a).value)
+    list.sort((a, b) => {
+      const ma = cellTableCallDropMetrics(a, f)
+      const mb = cellTableCallDropMetrics(b, f)
+      if (mb.affected !== ma.affected) return mb.affected - ma.affected
+      return mb.value - ma.value
+    })
   else if (tab === 'payload')
     list.sort(
-      (a, b) => cellTablePayloadDlMetrics(a).value - cellTablePayloadDlMetrics(b).value,
+      (a, b) =>
+        cellTablePayloadDlMetrics(a, f).value - cellTablePayloadDlMetrics(b, f).value,
     )
-  else list.sort((a, b) => cellTableHoPctMetrics(a).value - cellTableHoPctMetrics(b).value)
+  else
+    list.sort(
+      (a, b) => cellTableHoPctMetrics(a, f).value - cellTableHoPctMetrics(b, f).value,
+    )
   return list
 }
 
@@ -411,37 +524,63 @@ export function headlineMetric(sub: Subscriber, tab: TableTab): string {
 }
 
 /** KPI snapshot for map hover (state 3) */
-export function hoverKpisForCell(cellId: string): string {
+export function hoverKpisForCell(
+  cellId: string,
+  f: SubscriberGlobalFilters = ALL_SUBSCRIBER_FILTERS,
+): string {
   const c = CELL_MAP[cellId]
   if (!c) return ''
-  const dlm = cellTablePayloadDlMetrics(c)
-  const ulm = cellTablePayloadUlMetrics(c)
-  const hom = cellTableHoPctMetrics(c)
+  const fm = cellTableFailureMetrics(c, f)
+  const dlm = cellTablePayloadDlMetrics(c, f)
+  const ulm = cellTablePayloadUlMetrics(c, f)
+  const hom = cellTableHoPctMetrics(c, f)
   const dl = dlm.fromAnchors ? dlm.value : c.dlMbps
   const ul = ulm.fromAnchors ? ulm.value : c.ulMbps
   const ho = hom.fromAnchors ? hom.value : c.hoSuccessPct
-  return `DL ${dl} Mbps · UL ${ul} Mbps · HO ${ho.toFixed(1)}%`
+  let s = `DL ${dl} Mbps · UL ${ul} Mbps · HO ${ho.toFixed(1)}%`
+  if (fm.fromAnchors) {
+    if (fm.total > 0) {
+      s += ` · failures with issue / in cohort ${fm.affected}/${fm.total} subs`
+    } else {
+      s += ' · failures with issue / in cohort 0/0 subs (no match for filters)'
+    }
+  }
+  return s
 }
 
 /** Lines for map hover / focus tooltips */
-export function mapCellSummaryLines(c: Cell): string[] {
-  const f = cellTableFailureMetrics(c)
-  const dr = cellTableCallDropMetrics(c)
-  const dlm = cellTablePayloadDlMetrics(c)
-  const ulm = cellTablePayloadUlMetrics(c)
-  const hom = cellTableHoPctMetrics(c)
-  const failShown = f.fromAnchors ? f.value : c.setupAccessFailures
+export function mapCellSummaryLines(
+  c: Cell,
+  f: SubscriberGlobalFilters = ALL_SUBSCRIBER_FILTERS,
+): string[] {
+  const fm = cellTableFailureMetrics(c, f)
+  const dr = cellTableCallDropMetrics(c, f)
+  const dlm = cellTablePayloadDlMetrics(c, f)
+  const ulm = cellTablePayloadUlMetrics(c, f)
+  const hom = cellTableHoPctMetrics(c, f)
+  const failShown = fm.fromAnchors ? fm.value : c.setupAccessFailures
   const dropShown = dr.fromAnchors ? dr.value : c.callDrops
   const dlShown = dlm.fromAnchors ? dlm.value : c.dlMbps
   const ulShown = ulm.fromAnchors ? ulm.value : c.ulMbps
   const hoShown = hom.fromAnchors ? hom.value : c.hoSuccessPct
-  return [
+  const lines = [
     `${c.name}`,
     c.id,
     `DL ${dlShown} / UL ${ulShown} Mbps`,
     `HO ${hoShown.toFixed(1)}% · ${c.totalHandovers.toLocaleString()} handovers`,
     `Drops ${dropShown} · Setup/access ${failShown}`,
   ]
+  if (fm.fromAnchors) {
+    if (fm.total > 0) {
+      lines.push(
+        `Filtered footprint · failures with issue / in cohort ${fm.affected}/${fm.total} subs`,
+        `Drops with issue / in cohort ${dr.affected}/${dr.total} subs`,
+      )
+    } else {
+      lines.push('Filtered footprint · no subscribers match current filters')
+    }
+  }
+  return lines
 }
 
 export type ComparePeriodOption = '1h' | '24h' | '7d' | '30d' | 'custom'
@@ -553,3 +692,5 @@ export function computePeriodBKpiValue(
   }
   return Math.max(0, Math.round(valueA * base))
 }
+
+export type { SubscriberGlobalFilters } from '../utils/filterPresets'

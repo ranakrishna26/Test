@@ -706,6 +706,12 @@ body {
   color: var(--muted);
 }
 
+.table-footprint-hint {
+  margin: 0.15rem 0 0.45rem;
+  max-width: 42rem;
+  line-height: 1.35;
+}
+
 .back-link {
   align-self: flex-start;
   border: none;

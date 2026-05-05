@@ -54,6 +54,7 @@ export function GlobalFiltersBar({
               <option value="consumer">Consumer</option>
               <option value="enterprise">Enterprise</option>
               <option value="iot">IoT</option>
+              <option value="vip">VIP</option>
             </select>
           </label>
           <label className="filter-item">

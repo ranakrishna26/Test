@@ -238,7 +238,14 @@ function buildPlaceholderSubscribers(): Subscriber[] {
 
       const segment = pickSegment(u0)
       const device = pickDevice(u1, segment)
-      const timeHorizon = pickTimeHorizon(u2)
+      let timeHorizon = pickTimeHorizon(u2)
+      if (segment === 'vip') {
+        const ut = mix32(seed + 6) / 2 ** 32
+        if (ut < 0.5) timeHorizon = '24h'
+        else if (ut < 0.82) timeHorizon = '7d'
+        else if (ut < 0.94) timeHorizon = '30d'
+        else timeHorizon = '1h'
+      }
 
       const dlFactor = 0.48 + u3 * 0.52
       let dlMbps = Math.round(cell.dlMbps * dlFactor * 10) / 10
@@ -246,17 +253,38 @@ function buildPlaceholderSubscribers(): Subscriber[] {
       const ulMbps = Math.round(cell.ulMbps * (0.42 + u4 * 0.5) * 10) / 10
 
       const failRoll = mix32(seed + 11) / 2 ** 32
-      const setupAccessFailures =
+      let setupAccessFailures =
         failRoll < 0.62 ? 0 : failRoll < 0.88 ? 1 + (mix32(seed + 12) % 6) : 7 + (mix32(seed + 13) % 14)
 
       const dropRoll = mix32(seed + 21) / 2 ** 32
-      const callDrops =
+      let callDrops =
         dropRoll < 0.58 ? 0 : dropRoll < 0.9 ? 1 + (mix32(seed + 22) % 4) : 5 + (mix32(seed + 23) % 20)
+
+      if (segment === 'vip') {
+        const v = mix32(seed ^ 0x85ebca6b) / 2 ** 32
+        if (v < 0.4) {
+          setupAccessFailures = 0
+          callDrops = mix32(seed + 50) / 2 ** 32 < 0.9 ? 0 : 1
+        } else if (v < 0.65) {
+          setupAccessFailures = 1 + (mix32(seed + 51) % 3)
+          callDrops =
+            mix32(seed + 52) / 2 ** 32 < 0.4 ? 0 : 1 + (mix32(seed + 53) % 3)
+        } else if (v < 0.85) {
+          setupAccessFailures = 3 + (mix32(seed + 54) % 7)
+          callDrops = 1 + (mix32(seed + 55) % 6)
+        } else {
+          setupAccessFailures = 8 + (mix32(seed + 56) % 10)
+          callDrops = 2 + (mix32(seed + 57) % 10)
+        }
+      }
 
       const hoBase = cell.hoSuccessPct
       const hoJitter = (mix32(seed + 31) % 700) / 100 - 3.5
       let hoSuccessPct = Math.round((hoBase + hoJitter) * 10) / 10
       hoSuccessPct = Math.max(72, Math.min(99.6, hoSuccessPct))
+      if (segment === 'vip' && mix32(seed + 62) / 2 ** 32 < 0.28) {
+        hoSuccessPct = Math.min(hoSuccessPct, Math.max(72, hoBase - 5 - (mix32(seed + 63) % 10)))
+      }
 
       const sessions = 6 + (mix32(seed + 41) % 115)
 
@@ -531,6 +559,7 @@ export function hoverKpisForCell(
   const c = CELL_MAP[cellId]
   if (!c) return ''
   const fm = cellTableFailureMetrics(c, f)
+  const dr = cellTableCallDropMetrics(c, f)
   const dlm = cellTablePayloadDlMetrics(c, f)
   const ulm = cellTablePayloadUlMetrics(c, f)
   const hom = cellTableHoPctMetrics(c, f)
@@ -540,9 +569,12 @@ export function hoverKpisForCell(
   let s = `DL ${dl} Mbps · UL ${ul} Mbps · HO ${ho.toFixed(1)}%`
   if (fm.fromAnchors) {
     if (fm.total > 0) {
-      s += ` · failures with issue / in cohort ${fm.affected}/${fm.total} subs`
+      s += ` · failures ${fm.affected}/${fm.total} subs · ${Math.round(fm.value).toLocaleString()} failure events`
     } else {
-      s += ' · failures with issue / in cohort 0/0 subs (no match for filters)'
+      s += ' · footprint failures 0/0 subs (no match for filters)'
+    }
+    if (dr.total > 0) {
+      s += ` · drops ${dr.affected}/${dr.total} subs · ${Math.round(dr.value).toLocaleString()} drop events`
     }
   }
   return s
@@ -568,16 +600,16 @@ export function mapCellSummaryLines(
     c.id,
     `DL ${dlShown} / UL ${ulShown} Mbps`,
     `HO ${hoShown.toFixed(1)}% · ${c.totalHandovers.toLocaleString()} handovers`,
-    `Drops ${dropShown} · Setup/access ${failShown}`,
+    `Drops (RAN cell) ${dropShown} · Setup/access (RAN cell) ${failShown}`,
   ]
   if (fm.fromAnchors) {
     if (fm.total > 0) {
       lines.push(
-        `Filtered footprint · failures with issue / in cohort ${fm.affected}/${fm.total} subs`,
-        `Drops with issue / in cohort ${dr.affected}/${dr.total} subs`,
+        `Footprint · failures ${fm.affected}/${fm.total} subs · ${Math.round(fm.value).toLocaleString()} failure events`,
+        `Footprint · drops ${dr.affected}/${dr.total} subs · ${Math.round(dr.value).toLocaleString()} drop events`,
       )
     } else {
-      lines.push('Filtered footprint · no subscribers match current filters')
+      lines.push('Footprint · no subscribers match current filters')
     }
   }
   return lines

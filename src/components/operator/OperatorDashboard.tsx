@@ -17,6 +17,7 @@ import {
   SUBSCRIBERS,
   aggregateKpiFromSessions,
   applyGlobalSubscriberFilters,
+  cellById,
   cellTableCallDropMetrics,
   cellTableFailureMetrics,
   cellTableHoPctMetrics,
@@ -68,20 +69,23 @@ function CellFootprintRatio({
   fromAnchors,
   noMatchTooltip,
   ranTooltip,
+  issueDescriptor = 'this issue',
 }: {
   affected: number
   total: number
   fromAnchors: boolean
   noMatchTooltip: string
   ranTooltip: string
+  /** Phrase used in tooltip, e.g. "setup/access failures" or "call drops". */
+  issueDescriptor?: string
 }) {
   if (fromAnchors) {
     const cohortTooltip =
       total === 0
         ? noMatchTooltip
-        : `With issue / in cohort (after global filters): ${affected} subscriber${
+        : `Subscribers with ${issueDescriptor} / in cohort (after global filters): ${affected} subscriber${
             affected === 1 ? '' : 's'
-          } with this issue, ${total} in the footprint cohort.`
+          } with ${issueDescriptor}, ${total} in the footprint cohort.`
     return (
       <span className="metric-with-impact" title={cohortTooltip}>
         <span className="metric-with-impact__primary">
@@ -98,6 +102,21 @@ function CellFootprintRatio({
   )
 }
 
+function cellTableFootprintHint(tab: TableTab): string {
+  switch (tab) {
+    case 'failure':
+      return 'Same filtered footprint as the subscriber list (this cell and neighbours; global filters on the bar). With issue / cohort counts subscribers with any setup/access failure; denominator is cohort size. IMSI search only filters the subscriber table.'
+    case 'callDrop':
+      return 'Same filtered footprint as the subscriber list (this cell and neighbours; global filters on the bar). With issue / cohort counts subscribers with any call drop; denominator is cohort size. IMSI search only filters the subscriber table.'
+    case 'payload':
+      return 'Columns match the subscriber drill-down footprint (this cell and neighbours; global filters). DL and UL columns compare each subscriber to a fraction of the cell RAN throughput. IMSI search only filters the subscriber table.'
+    case 'handover':
+      return 'Columns match the subscriber drill-down footprint (this cell and neighbours; global filters). With issue / in cohort reflects subscribers under the HO success threshold for that cell. IMSI search only filters the subscriber table.'
+    default:
+      return ''
+  }
+}
+
 function heatmapData(sessions: ReturnType<typeof getSessions>) {
   const rows = 6
   const cols = 8
@@ -110,6 +129,71 @@ function heatmapData(sessions: ReturnType<typeof getSessions>) {
     }
   }
   return { rows, cols, cells }
+}
+
+function TableNavBreadcrumb({
+  view,
+  selectedCellId,
+  selectedImsi,
+  onToCells,
+  onToSubscribers,
+}: {
+  view: 'subscribers' | 'sessions'
+  selectedCellId: string | null
+  selectedImsi: string | null
+  onToCells: () => void
+  onToSubscribers: () => void
+}) {
+  const cell = selectedCellId ? cellById(selectedCellId) : undefined
+  const cellLabel = cell ? `${cell.name} (${cell.id})` : (selectedCellId ?? 'Cell')
+
+  return (
+    <nav className="table-breadcrumb" aria-label="Drill-down navigation">
+      <ol className="table-breadcrumb-list">
+        <li className="table-breadcrumb-item">
+          <button type="button" className="table-breadcrumb-link" onClick={onToCells}>
+            Cells
+          </button>
+        </li>
+        {view === 'subscribers' && selectedCellId && (
+          <>
+            <li className="table-breadcrumb-sep" aria-hidden="true">
+              /
+            </li>
+            <li className="table-breadcrumb-item">
+              <span className="table-breadcrumb-current" aria-current="page">
+                {cellLabel}
+              </span>
+            </li>
+          </>
+        )}
+        {view === 'sessions' && (
+          <>
+            {selectedCellId ? (
+              <>
+                <li className="table-breadcrumb-sep" aria-hidden="true">
+                  /
+                </li>
+                <li className="table-breadcrumb-item">
+                  <button type="button" className="table-breadcrumb-link" onClick={onToSubscribers}>
+                    {cellLabel}
+                  </button>
+                </li>
+              </>
+            ) : null}
+            <li className="table-breadcrumb-sep" aria-hidden="true">
+              /
+            </li>
+            <li className="table-breadcrumb-item">
+              <span className="table-breadcrumb-current mono" aria-current="page">
+                {selectedImsi}
+              </span>
+            </li>
+          </>
+        )}
+      </ol>
+    </nav>
+  )
 }
 
 export function OperatorDashboard() {
@@ -130,6 +214,8 @@ export function OperatorDashboard() {
   const [view, setView] = useState<View>('cells')
   const [selectedCellId, setSelectedCellId] = useState<string | null>(null)
   const [selectedImsi, setSelectedImsi] = useState<string | null>(null)
+  /** STATE 3: filter session table to one cell (map click); cleared on background click or navigation. */
+  const [sessionCellFilter, setSessionCellFilter] = useState<string | null>(null)
   const [tableImsiSearch, setTableImsiSearch] = useState('')
 
   const [comparePeriodB, setComparePeriodB] = useState<ComparePeriodOption>('7d')
@@ -173,10 +259,15 @@ export function OperatorDashboard() {
     return SUBSCRIBERS.filter((s) => matchImsi(q, s.imsi)).slice(0, 8)
   }, [tableImsiSearch])
 
-  const sessions = useMemo(
+  const allSessionsForSubscriber = useMemo(
     () => (selectedImsi ? getSessions(selectedImsi) : []),
     [selectedImsi],
   )
+
+  const sessions = useMemo(() => {
+    if (!sessionCellFilter) return allSessionsForSubscriber
+    return allSessionsForSubscriber.filter((s) => s.cellId === sessionCellFilter)
+  }, [allSessionsForSubscriber, sessionCellFilter])
 
   const trendData = useMemo(
     () => sessions.map((s, i) => ({ i, tp: s.throughputMbps })),
@@ -228,42 +319,52 @@ export function OperatorDashboard() {
     customRangeEnd,
   ])
 
-  function selectCellFromTable(cellId: string) {
+  function handleMapCellSelect(cellId: string) {
+    if (view === 'sessions' && selectedImsi) {
+      setSessionCellFilter(cellId)
+      return
+    }
+    setSessionCellFilter(null)
     setSelectedCellId(cellId)
     setSelectedImsi(null)
     setView('subscribers')
   }
 
-  function selectCellFromMap(cellId: string) {
-    if (view !== 'cells') return
-    selectCellFromTable(cellId)
+  function handleMapBackgroundClick() {
+    if (view === 'sessions' && selectedImsi) setSessionCellFilter(null)
+  }
+
+  function selectCellFromTable(cellId: string) {
+    setSelectedCellId(cellId)
+    setSelectedImsi(null)
+    setSessionCellFilter(null)
+    setView('subscribers')
   }
 
   function backToCells() {
     setView('cells')
     setSelectedCellId(null)
     setSelectedImsi(null)
+    setSessionCellFilter(null)
     setTableImsiSearch('')
   }
 
   function backToSubscribers() {
     setView('subscribers')
     setSelectedImsi(null)
-  }
-
-  function backFromSessions() {
-    if (selectedCellId) backToSubscribers()
-    else backToCells()
+    setSessionCellFilter(null)
   }
 
   function openSubscriber(imsi: string) {
     setSelectedImsi(imsi)
+    setSessionCellFilter(null)
     setView('sessions')
   }
 
   function openSubscriberFromGlobal(imsi: string) {
     setSelectedCellId(null)
     setSelectedImsi(imsi)
+    setSessionCellFilter(null)
     setView('sessions')
   }
 
@@ -339,6 +440,25 @@ export function OperatorDashboard() {
               />
             </label>
 
+            {view === 'subscribers' && selectedCellId && (
+              <TableNavBreadcrumb
+                view="subscribers"
+                selectedCellId={selectedCellId}
+                selectedImsi={null}
+                onToCells={backToCells}
+                onToSubscribers={backToSubscribers}
+              />
+            )}
+            {view === 'sessions' && selectedImsi && (
+              <TableNavBreadcrumb
+                view="sessions"
+                selectedCellId={selectedCellId}
+                selectedImsi={selectedImsi}
+                onToCells={backToCells}
+                onToSubscribers={backToSubscribers}
+              />
+            )}
+
             {view === 'cells' && tableImsiSearch.trim() && imsiQuickMatches.length > 0 && (
               <div className="quick-matches">
                 <span className="quick-matches-label">Matching subscribers (open session view)</span>
@@ -368,12 +488,7 @@ export function OperatorDashboard() {
                     </button>
                   ))}
                 </div>
-                <p className="context-line table-footprint-hint">
-                  Cell KPI columns show with issue / in cohort for the same filtered footprint as the
-                  subscriber list (this cell and neighbours; time range, subscriber type, and device
-                  type above). The denominator is cohort size, not a second “bad” count. IMSI search
-                  only filters the subscriber table.
-                </p>
+                <p className="context-line table-footprint-hint">{cellTableFootprintHint(activeTab)}</p>
                 <div className="table-scroll">
                   {activeTab === 'failure' && (
                     <table className="minimal-table">
@@ -398,6 +513,7 @@ export function OperatorDashboard() {
                                   fromAnchors={m.fromAnchors}
                                   noMatchTooltip="No subscribers match current global filters in this footprint."
                                   ranTooltip={`No subscribers in this footprint for drill-down. RAN: ${c.setupAccessFailures} failures`}
+                                  issueDescriptor="setup/access failures"
                                 />
                               </td>
                             </tr>
@@ -429,6 +545,7 @@ export function OperatorDashboard() {
                                   fromAnchors={m.fromAnchors}
                                   noMatchTooltip="No subscribers match current global filters in this footprint."
                                   ranTooltip={`No subscribers in this footprint for drill-down. RAN: ${c.callDrops} drops`}
+                                  issueDescriptor="call drops"
                                 />
                               </td>
                             </tr>
@@ -518,12 +635,10 @@ export function OperatorDashboard() {
 
             {view === 'subscribers' && selectedCellId && (
               <>
-                <button type="button" className="back-link" onClick={backToCells}>
-                  ← Back to cell tables
-                </button>
                 <p className="context-line">
-                  Subscribers on selected cell and neighbours · sorted worst first (
-                  {tabHeadlineLabel(activeTab)})
+                  Footprint subscribers (this cell and neighbours), worst first —{' '}
+                  {tabHeadlineLabel(activeTab)}. Use the map to switch cell; scope matches the
+                  footprint.
                 </p>
                 <div className="table-scroll">
                   <table className="minimal-table">
@@ -552,16 +667,23 @@ export function OperatorDashboard() {
 
             {view === 'sessions' && selectedImsi && (
               <>
-                <button type="button" className="back-link" onClick={backFromSessions}>
-                  ←{' '}
-                  {selectedCellId ? 'Back to subscriber list' : 'Back to cell tables'}
-                </button>
-                <p className="context-line mono">Subscriber {selectedImsi}</p>
+                <p className="context-line">
+                  Session list and charts for the subscriber above. Map cell click filters rows;
+                  empty map clears the filter.
+                </p>
+                {sessionCellFilter && (
+                  <p className="session-cell-filter-banner" role="status">
+                    Showing sessions on{' '}
+                    <strong>{cellById(sessionCellFilter)?.name ?? sessionCellFilter}</strong> (
+                    {sessionCellFilter}). Click empty map area to show all sessions.
+                  </p>
+                )}
                 <div className="table-scroll">
                   <table className="minimal-table session-table">
                     <thead>
                       <tr>
                         <th>Session ID</th>
+                        <th>Cell</th>
                         <th>Signal quality</th>
                         <th>Throughput</th>
                         <th>Connectivity</th>
@@ -570,8 +692,18 @@ export function OperatorDashboard() {
                     </thead>
                     <tbody>
                       {sessions.map((s) => (
-                        <tr key={s.id}>
+                        <tr
+                          key={s.id}
+                          className={
+                            sessionCellFilter && s.cellId === sessionCellFilter
+                              ? 'session-row--cell-focus'
+                              : undefined
+                          }
+                        >
                           <td className="mono">{s.id}</td>
+                          <td className="muted">
+                            {s.cellName} <span className="mono">({s.cellId})</span>
+                          </td>
                           <td>{s.signalQuality.toFixed(2)}</td>
                           <td>{s.throughputMbps} Mbps</td>
                           <td>{s.connectivity}</td>
@@ -595,10 +727,12 @@ export function OperatorDashboard() {
                 mode={mapMode}
                 selectedCellId={selectedCellId}
                 subscriberImsi={selectedImsi}
+                sessionTableCellFilter={sessionCellFilter}
                 showHoverKpis={view === 'sessions'}
                 embed={view === 'sessions' ? 'compact' : 'full'}
                 subscriberGlobalFilters={subscriberGlobalFilters}
-                onCellSelect={selectCellFromMap}
+                onCellSelect={handleMapCellSelect}
+                onMapBackgroundClick={handleMapBackgroundClick}
               />
             </div>
 
@@ -609,7 +743,11 @@ export function OperatorDashboard() {
                   <div className="chart-grid">
                     <figure className="chart-fig">
                       <figcaption>Trend · throughput by session order</figcaption>
-                      <ResponsiveContainer width="100%" height={220}>
+                      <ResponsiveContainer
+                        width="100%"
+                        height={220}
+                        initialDimension={{ width: 360, height: 220 }}
+                      >
                         <LineChart data={trendData}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#e8e8e8" />
                           <XAxis dataKey="i" tick={{ fontSize: 11 }} />
@@ -627,7 +765,11 @@ export function OperatorDashboard() {
                     </figure>
                     <figure className="chart-fig">
                       <figcaption>Scatter · signal vs throughput</figcaption>
-                      <ResponsiveContainer width="100%" height={220}>
+                      <ResponsiveContainer
+                        width="100%"
+                        height={220}
+                        initialDimension={{ width: 360, height: 220 }}
+                      >
                         <ScatterChart>
                           <CartesianGrid strokeDasharray="3 3" stroke="#e8e8e8" />
                           <XAxis
@@ -721,7 +863,11 @@ export function OperatorDashboard() {
                       {comparisonKpiFromTab(activeTab).label}: Period A vs Period B
                     </figcaption>
                     {comparisonBarData.length > 0 ? (
-                      <ResponsiveContainer width="100%" height={300}>
+                      <ResponsiveContainer
+                        width="100%"
+                        height={300}
+                        initialDimension={{ width: 360, height: 300 }}
+                      >
                         <BarChart
                           data={comparisonBarData}
                           margin={{ top: 12, right: 16, left: 8, bottom: 56 }}

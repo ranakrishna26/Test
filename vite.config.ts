@@ -12,7 +12,11 @@ export default defineConfig(({ command }) => ({
   server: {
     port: 5173,
     strictPort: false,
-    /** Helps when `localhost` fails; terminal will also show a Network URL to try. */
-    host: true,
+    /**
+     * Omit explicit `host: true` (0.0.0.0 / IPv4-only on many setups): on macOS,
+     * `localhost` often resolves to ::1 first while the dev server is only on IPv4,
+     * so http://localhost:5173/ fails with connection refused while 127.0.0.1 works.
+     * Default host is loopback-friendly; use `npm run dev:lan` when you need LAN URLs.
+     */
   },
 }))

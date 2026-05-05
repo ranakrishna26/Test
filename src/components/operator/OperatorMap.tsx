@@ -18,12 +18,16 @@ type Props = {
   mode: MapMode
   selectedCellId: string | null
   subscriberImsi: string | null
+  /** When in subscriber session view, cell used to filter the session table (map sync). */
+  sessionTableCellFilter?: string | null
   showHoverKpis: boolean
   /** Compact embedded map (subscriber session view) */
   embed?: 'full' | 'compact'
   /** Global filters for map tooltips (must match cell table / drill-down). */
   subscriberGlobalFilters?: SubscriberGlobalFilters
   onCellSelect?: (cellId: string) => void
+  /** Click on map canvas outside cells (e.g. clears session table cell filter). */
+  onMapBackgroundClick?: () => void
 }
 
 function clamp(n: number, lo: number, hi: number): number {
@@ -84,10 +88,12 @@ export function OperatorMap({
   mode,
   selectedCellId,
   subscriberImsi,
+  sessionTableCellFilter,
   showHoverKpis: _showHoverKpis,
   embed = 'full',
   subscriberGlobalFilters,
   onCellSelect,
+  onMapBackgroundClick,
 }: Props) {
   void _showHoverKpis
   const compact = embed === 'compact'
@@ -266,10 +272,12 @@ export function OperatorMap({
   }, [])
 
   const legendText = useMemo(() => {
-    if (mode === 'all') return 'All sectors · click to inspect cell'
-    if (mode === 'cellFocus') return 'Blue = selected · gray = neighbor · faded = other'
-    return 'Blue = subscriber cells · gray = neighbor footprint'
-  }, [mode])
+    if (mode === 'all') return 'All sectors · click a cell or table row to open subscribers'
+    if (mode === 'cellFocus') return 'Blue = selected · gray = neighbour · faded = other · map or table drives the same cell'
+    if (sessionTableCellFilter)
+      return 'Subscriber footprint · hover for KPIs · cell click filters sessions · empty area shows all sessions'
+    return 'Subscriber footprint · hover for KPIs · click a cell to filter sessions on that cell'
+  }, [mode, sessionTableCellFilter])
 
   function updateHoverFromEvent(cell: Cell, e: React.MouseEvent) {
     const shell = shellRef.current
@@ -324,7 +332,19 @@ export function OperatorMap({
               />
             </pattern>
           </defs>
-          <rect x="0" y="0" width="100" height="100" fill="url(#map-grid)" />
+          <rect x="0" y="0" width="100" height="100" fill="url(#map-grid)" pointerEvents="none" />
+          <rect
+            x="0"
+            y="0"
+            width="100"
+            height="100"
+            fill="transparent"
+            className="map-sky-catcher"
+            onClick={(e) => {
+              e.stopPropagation()
+              onMapBackgroundClick?.()
+            }}
+          />
 
           {neighborLinks.map((ln) => {
             const dim = layer(ln.idA) === 'faded' && layer(ln.idB) === 'faded'
@@ -336,6 +356,7 @@ export function OperatorMap({
                 x2={ln.x2}
                 y2={ln.y2}
                 className={`map-link ${dim ? 'faded' : ''}`}
+                pointerEvents="none"
               />
             )
           })}
@@ -345,13 +366,18 @@ export function OperatorMap({
             const title = mapCellSummaryLines(c, filters).join('\n')
             const selected =
               mode === 'cellFocus' && selectedCellId === c.id ? ' map-cell--selected' : ''
+            const sessionFilterRing =
+              mode === 'subscriberFocus' && sessionTableCellFilter === c.id
+                ? ' map-cell--session-filter'
+                : ''
             return (
               <g
                 key={c.id}
-                className={`map-cell map-cell--${lyr}${selected}`}
+                className={`map-cell map-cell--${lyr}${selected}${sessionFilterRing}`}
                 transform={`translate(${c.mapX},${c.mapY})`}
                 onClick={(e) => {
                   if (e.altKey) return
+                  e.stopPropagation()
                   onCellSelect?.(c.id)
                 }}
                 onMouseEnter={(e) => updateHoverFromEvent(c, e)}
@@ -369,6 +395,9 @@ export function OperatorMap({
                 <title>{title}</title>
                 <circle className="map-cell-hit" r="6" />
                 {selected ? <circle className="map-selected-ring" r="7.5" /> : null}
+                {sessionFilterRing ? (
+                  <circle className="map-session-filter-ring" r="8.2" />
+                ) : null}
                 <polygon className="map-sector" points="0,-5 4.2,2.6 -4.2,2.6" />
                 <text y="9" className="map-cell-name" textAnchor="middle">
                   {c.name}

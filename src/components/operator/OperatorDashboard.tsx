@@ -16,11 +16,11 @@ import {
 import {
   SUBSCRIBERS,
   aggregateKpiFromSessions,
-  cellCallDropSubscriberImpact,
-  cellFailureSubscriberImpact,
-  cellHandoverSubscriberImpact,
-  cellPayloadDlSubscriberImpact,
-  cellPayloadUlSubscriberImpact,
+  cellTableCallDropMetrics,
+  cellTableFailureMetrics,
+  cellTableHoPctMetrics,
+  cellTablePayloadDlMetrics,
+  cellTablePayloadUlMetrics,
   comparePeriodBLabel,
   comparisonKpiFromTab,
   computePeriodBKpiValue,
@@ -63,18 +63,20 @@ function CellMetricWithImpact({
   primary,
   affected,
   total,
+  showRatio,
 }: {
   primary: ReactNode
   affected: number
   total: number
+  showRatio: boolean
 }) {
   return (
     <span className="metric-with-impact">
       <span className="metric-with-impact__primary">{primary}</span>
-      {total > 0 && (
+      {showRatio && total > 0 && (
         <span className="metric-with-impact__context">
           {' '}
-          · {affected} of {total} subscribers affected
+          {affected}/{total}
         </span>
       )}
     </span>
@@ -342,16 +344,17 @@ export function OperatorDashboard() {
                       </thead>
                       <tbody>
                         {ranked.map((c) => {
-                          const impact = cellFailureSubscriberImpact(c.id)
+                          const m = cellTableFailureMetrics(c)
                           return (
                             <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
                               <td>{c.name}</td>
                               <td className="muted">{c.id}</td>
                               <td>
                                 <CellMetricWithImpact
-                                  primary={`${c.setupAccessFailures} ${c.setupAccessFailures === 1 ? 'failure' : 'failures'}`}
-                                  affected={impact.affected}
-                                  total={impact.total}
+                                  primary={`${m.value} ${m.value === 1 ? 'failure' : 'failures'}`}
+                                  affected={m.affected}
+                                  total={m.total}
+                                  showRatio={m.fromAnchors}
                                 />
                               </td>
                             </tr>
@@ -371,16 +374,17 @@ export function OperatorDashboard() {
                       </thead>
                       <tbody>
                         {ranked.map((c) => {
-                          const impact = cellCallDropSubscriberImpact(c.id)
+                          const m = cellTableCallDropMetrics(c)
                           return (
                             <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
                               <td>{c.name}</td>
                               <td className="muted">{c.id}</td>
                               <td>
                                 <CellMetricWithImpact
-                                  primary={`${c.callDrops} ${c.callDrops === 1 ? 'drop' : 'drops'}`}
-                                  affected={impact.affected}
-                                  total={impact.total}
+                                  primary={`${m.value} ${m.value === 1 ? 'drop' : 'drops'}`}
+                                  affected={m.affected}
+                                  total={m.total}
+                                  showRatio={m.fromAnchors}
                                 />
                               </td>
                             </tr>
@@ -401,24 +405,34 @@ export function OperatorDashboard() {
                       </thead>
                       <tbody>
                         {ranked.map((c) => {
-                          const dlImpact = cellPayloadDlSubscriberImpact(c)
-                          const ulImpact = cellPayloadUlSubscriberImpact(c)
+                          const dl = cellTablePayloadDlMetrics(c)
+                          const ul = cellTablePayloadUlMetrics(c)
+                          const dlMbps =
+                            Number.isInteger(dl.value) || dl.value % 1 === 0
+                              ? String(dl.value)
+                              : dl.value.toFixed(1)
+                          const ulMbps =
+                            Number.isInteger(ul.value) || ul.value % 1 === 0
+                              ? String(ul.value)
+                              : ul.value.toFixed(1)
                           return (
                             <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
                               <td>{c.name}</td>
                               <td className="muted">{c.id}</td>
                               <td>
                                 <CellMetricWithImpact
-                                  primary={`${c.dlMbps} Mbps`}
-                                  affected={dlImpact.affected}
-                                  total={dlImpact.total}
+                                  primary={`${dlMbps} Mbps`}
+                                  affected={dl.affected}
+                                  total={dl.total}
+                                  showRatio={dl.fromAnchors}
                                 />
                               </td>
                               <td>
                                 <CellMetricWithImpact
-                                  primary={`${c.ulMbps} Mbps`}
-                                  affected={ulImpact.affected}
-                                  total={ulImpact.total}
+                                  primary={`${ulMbps} Mbps`}
+                                  affected={ul.affected}
+                                  total={ul.total}
+                                  showRatio={ul.fromAnchors}
                                 />
                               </td>
                             </tr>
@@ -439,7 +453,7 @@ export function OperatorDashboard() {
                       </thead>
                       <tbody>
                         {ranked.map((c) => {
-                          const hoImpact = cellHandoverSubscriberImpact(c)
+                          const m = cellTableHoPctMetrics(c)
                           return (
                             <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
                               <td>{c.name}</td>
@@ -447,9 +461,10 @@ export function OperatorDashboard() {
                               <td>{c.totalHandovers.toLocaleString()}</td>
                               <td>
                                 <CellMetricWithImpact
-                                  primary={`${c.hoSuccessPct.toFixed(1)}%`}
-                                  affected={hoImpact.affected}
-                                  total={hoImpact.total}
+                                  primary={`${m.value.toFixed(1)}%`}
+                                  affected={m.affected}
+                                  total={m.total}
+                                  showRatio={m.fromAnchors}
                                 />
                               </td>
                             </tr>

@@ -245,58 +245,82 @@ export function subscribersOnCell(cellId: string): Subscriber[] {
   return SUBSCRIBERS.filter((s) => s.cellId === cellId)
 }
 
-/** Counts for cell-table “X of Y subscribers affected” context (anchor cell only). */
-export type CellSubscriberImpact = {
+/**
+ * Cell-table headline + subscriber ratio, all from the same source when anchor
+ * subscribers exist on that cell; otherwise headline uses RAN (Cell) totals
+ * and no ratio is shown.
+ */
+export type CellTableMetric = {
+  value: number
   affected: number
   total: number
+  /** When true, `value` is derived from anchor subscribers (matches x/y). */
+  fromAnchors: boolean
 }
 
-export function cellFailureSubscriberImpact(cellId: string): CellSubscriberImpact {
-  const subs = subscribersOnCell(cellId)
-  return {
-    total: subs.length,
-    affected: subs.filter((s) => s.setupAccessFailures > 0).length,
+/** Sum of setup/access failures across anchor subscribers; ratio = subs with any failures. */
+export function cellTableFailureMetrics(c: Cell): CellTableMetric {
+  const subs = subscribersOnCell(c.id)
+  if (!subs.length) {
+    return {
+      value: c.setupAccessFailures,
+      affected: 0,
+      total: 0,
+      fromAnchors: false,
+    }
   }
+  const value = subs.reduce((a, s) => a + s.setupAccessFailures, 0)
+  const affected = subs.filter((s) => s.setupAccessFailures > 0).length
+  return { value, affected, total: subs.length, fromAnchors: true }
 }
 
-export function cellCallDropSubscriberImpact(cellId: string): CellSubscriberImpact {
-  const subs = subscribersOnCell(cellId)
-  return {
-    total: subs.length,
-    affected: subs.filter((s) => s.callDrops > 0).length,
+/** Sum of call drops across anchor subscribers; ratio = subs with any drops. */
+export function cellTableCallDropMetrics(c: Cell): CellTableMetric {
+  const subs = subscribersOnCell(c.id)
+  if (!subs.length) {
+    return { value: c.callDrops, affected: 0, total: 0, fromAnchors: false }
   }
+  const value = subs.reduce((a, s) => a + s.callDrops, 0)
+  const affected = subs.filter((s) => s.callDrops > 0).length
+  return { value, affected, total: subs.length, fromAnchors: true }
 }
 
-/** DL below this fraction of the cell aggregate headline counts as constrained. */
+/** Worst DL among anchors vs RAN headline; ratio = subs below fraction of cell DL. */
 const PAYLOAD_DL_FRAC = 0.82
 const PAYLOAD_UL_FRAC = 0.82
 
-export function cellPayloadDlSubscriberImpact(cell: Cell): CellSubscriberImpact {
-  const subs = subscribersOnCell(cell.id)
-  const threshold = cell.dlMbps * PAYLOAD_DL_FRAC
-  return {
-    total: subs.length,
-    affected: subs.filter((s) => s.dlMbps < threshold).length,
+export function cellTablePayloadDlMetrics(c: Cell): CellTableMetric {
+  const subs = subscribersOnCell(c.id)
+  if (!subs.length) {
+    return { value: c.dlMbps, affected: 0, total: 0, fromAnchors: false }
   }
+  const value = Math.min(...subs.map((s) => s.dlMbps))
+  const threshold = c.dlMbps * PAYLOAD_DL_FRAC
+  const affected = subs.filter((s) => s.dlMbps < threshold).length
+  return { value, affected, total: subs.length, fromAnchors: true }
 }
 
-export function cellPayloadUlSubscriberImpact(cell: Cell): CellSubscriberImpact {
-  const subs = subscribersOnCell(cell.id)
-  const threshold = cell.ulMbps * PAYLOAD_UL_FRAC
-  return {
-    total: subs.length,
-    affected: subs.filter((s) => s.ulMbps < threshold).length,
+export function cellTablePayloadUlMetrics(c: Cell): CellTableMetric {
+  const subs = subscribersOnCell(c.id)
+  if (!subs.length) {
+    return { value: c.ulMbps, affected: 0, total: 0, fromAnchors: false }
   }
+  const value = Math.min(...subs.map((s) => s.ulMbps))
+  const threshold = c.ulMbps * PAYLOAD_UL_FRAC
+  const affected = subs.filter((s) => s.ulMbps < threshold).length
+  return { value, affected, total: subs.length, fromAnchors: true }
 }
 
-/** Subscribers with HO success materially below the cell headline (capped watch band). */
-export function cellHandoverSubscriberImpact(cell: Cell): CellSubscriberImpact {
-  const subs = subscribersOnCell(cell.id)
-  const bar = Math.min(92.5, cell.hoSuccessPct - 0.5)
-  return {
-    total: subs.length,
-    affected: subs.filter((s) => s.hoSuccessPct < bar).length,
+/** Worst HO% among anchors; ratio = subs below cell HO minus margin (capped). */
+export function cellTableHoPctMetrics(c: Cell): CellTableMetric {
+  const subs = subscribersOnCell(c.id)
+  if (!subs.length) {
+    return { value: c.hoSuccessPct, affected: 0, total: 0, fromAnchors: false }
   }
+  const value = Math.min(...subs.map((s) => s.hoSuccessPct))
+  const bar = Math.min(92.5, c.hoSuccessPct - 0.5)
+  const affected = subs.filter((s) => s.hoSuccessPct < bar).length
+  return { value, affected, total: subs.length, fromAnchors: true }
 }
 
 function sessionsForImsi(imsi: string): SessionRow[] {
@@ -349,10 +373,17 @@ export function cellsForSubscriber(imsi: string): Set<string> {
 
 export function rankedCells(tab: TableTab): Cell[] {
   const list = [...CELLS]
-  if (tab === 'failure') list.sort((a, b) => b.setupAccessFailures - a.setupAccessFailures)
-  else if (tab === 'callDrop') list.sort((a, b) => b.callDrops - a.callDrops)
-  else if (tab === 'payload') list.sort((a, b) => a.dlMbps - b.dlMbps)
-  else list.sort((a, b) => a.hoSuccessPct - b.hoSuccessPct)
+  if (tab === 'failure')
+    list.sort(
+      (a, b) => cellTableFailureMetrics(b).value - cellTableFailureMetrics(a).value,
+    )
+  else if (tab === 'callDrop')
+    list.sort((a, b) => cellTableCallDropMetrics(b).value - cellTableCallDropMetrics(a).value)
+  else if (tab === 'payload')
+    list.sort(
+      (a, b) => cellTablePayloadDlMetrics(a).value - cellTablePayloadDlMetrics(b).value,
+    )
+  else list.sort((a, b) => cellTableHoPctMetrics(a).value - cellTableHoPctMetrics(b).value)
   return list
 }
 
@@ -383,17 +414,33 @@ export function headlineMetric(sub: Subscriber, tab: TableTab): string {
 export function hoverKpisForCell(cellId: string): string {
   const c = CELL_MAP[cellId]
   if (!c) return ''
-  return `DL ${c.dlMbps} Mbps · UL ${c.ulMbps} Mbps · HO ${c.hoSuccessPct}%`
+  const dlm = cellTablePayloadDlMetrics(c)
+  const ulm = cellTablePayloadUlMetrics(c)
+  const hom = cellTableHoPctMetrics(c)
+  const dl = dlm.fromAnchors ? dlm.value : c.dlMbps
+  const ul = ulm.fromAnchors ? ulm.value : c.ulMbps
+  const ho = hom.fromAnchors ? hom.value : c.hoSuccessPct
+  return `DL ${dl} Mbps · UL ${ul} Mbps · HO ${ho.toFixed(1)}%`
 }
 
 /** Lines for map hover / focus tooltips */
 export function mapCellSummaryLines(c: Cell): string[] {
+  const f = cellTableFailureMetrics(c)
+  const dr = cellTableCallDropMetrics(c)
+  const dlm = cellTablePayloadDlMetrics(c)
+  const ulm = cellTablePayloadUlMetrics(c)
+  const hom = cellTableHoPctMetrics(c)
+  const failShown = f.fromAnchors ? f.value : c.setupAccessFailures
+  const dropShown = dr.fromAnchors ? dr.value : c.callDrops
+  const dlShown = dlm.fromAnchors ? dlm.value : c.dlMbps
+  const ulShown = ulm.fromAnchors ? ulm.value : c.ulMbps
+  const hoShown = hom.fromAnchors ? hom.value : c.hoSuccessPct
   return [
     `${c.name}`,
     c.id,
-    `DL ${c.dlMbps} / UL ${c.ulMbps} Mbps`,
-    `HO ${c.hoSuccessPct}% · ${c.totalHandovers.toLocaleString()} handovers`,
-    `Drops ${c.callDrops} · Setup/access ${c.setupAccessFailures}`,
+    `DL ${dlShown} / UL ${ulShown} Mbps`,
+    `HO ${hoShown.toFixed(1)}% · ${c.totalHandovers.toLocaleString()} handovers`,
+    `Drops ${dropShown} · Setup/access ${failShown}`,
   ]
 }
 

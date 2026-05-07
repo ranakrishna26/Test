@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import {
   Bar,
   BarChart,
@@ -34,6 +34,7 @@ import {
   subscribersForFootprint,
   tabHeadlineLabel,
   type ComparePeriodOption,
+  type Cell as NetworkCell,
   type SubscriberGlobalFilters,
   type TableTab,
 } from '../../data/placeholderNetwork'
@@ -50,8 +51,8 @@ import {
 type View = 'cells' | 'subscribers' | 'sessions'
 
 const TABS: { id: TableTab; label: string }[] = [
-  { id: 'failure', label: 'Failure type' },
   { id: 'callDrop', label: 'Call drop' },
+  { id: 'failure', label: 'Failure type' },
   { id: 'payload', label: 'Payload' },
   { id: 'handover', label: 'Handover' },
 ]
@@ -129,6 +130,47 @@ function heatmapData(sessions: ReturnType<typeof getSessions>) {
     }
   }
   return { rows, cols, cells }
+}
+
+function cellDetailColSpan(tab: TableTab): number {
+  return tab === 'payload' || tab === 'handover' ? 5 : 4
+}
+
+function CellDetailsPanel({ cell }: { cell: NetworkCell }) {
+  return (
+    <div className="cell-details-grid" role="group" aria-label={`Details for ${cell.name}`}>
+      <span>
+        <strong>Site</strong>: {cell.siteCode}
+      </span>
+      <span>
+        <strong>Sector</strong>: {cell.sector}
+      </span>
+      <span>
+        <strong>Azimuth</strong>: {cell.azimuthDeg} deg
+      </span>
+      <span>
+        <strong>PCI</strong>: {cell.pci}
+      </span>
+      <span>
+        <strong>NR-ARFCN</strong>: {cell.nrArfcn}
+      </span>
+      <span>
+        <strong>Band / BW</strong>: {cell.band} / {cell.bandwidthMhz} MHz
+      </span>
+      <span>
+        <strong>TAC</strong>: {cell.tac}
+      </span>
+      <span>
+        <strong>Antenna</strong>: {cell.antennaHeightM} m, tilt {cell.electricalTiltDeg} deg
+      </span>
+      <span>
+        <strong>Vendor</strong>: {cell.vendor}
+      </span>
+      <span>
+        <strong>Neighbors</strong>: {cell.neighborIds.length}
+      </span>
+    </div>
+  )
 }
 
 function TableNavBreadcrumb({
@@ -210,12 +252,14 @@ export function OperatorDashboard() {
     persistFilterPresets(filterPresets)
   }, [filterPresets])
 
-  const [activeTab, setActiveTab] = useState<TableTab>('failure')
+  const [activeTab, setActiveTab] = useState<TableTab>('callDrop')
   const [view, setView] = useState<View>('cells')
   const [selectedCellId, setSelectedCellId] = useState<string | null>(null)
   const [selectedImsi, setSelectedImsi] = useState<string | null>(null)
   /** STATE 3: filter session table to one cell (map click); cleared on background click or navigation. */
   const [sessionCellFilter, setSessionCellFilter] = useState<string | null>(null)
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
+  const [expandedCellIds, setExpandedCellIds] = useState<Set<string>>(() => new Set())
   const [tableImsiSearch, setTableImsiSearch] = useState('')
 
   const [comparePeriodB, setComparePeriodB] = useState<ComparePeriodOption>('7d')
@@ -279,6 +323,12 @@ export function OperatorDashboard() {
   )
   const heatmap = useMemo(() => heatmapData(sessions), [sessions])
 
+  useEffect(() => {
+    if (selectedSessionId && !sessions.some((s) => s.id === selectedSessionId)) {
+      setSelectedSessionId(null)
+    }
+  }, [sessions, selectedSessionId])
+
   const comparisonBarData = useMemo(() => {
     if (!sessions.length) return []
     const meta = comparisonKpiFromTab(activeTab)
@@ -322,6 +372,7 @@ export function OperatorDashboard() {
   function handleMapCellSelect(cellId: string) {
     if (view === 'sessions' && selectedImsi) {
       setSessionCellFilter(cellId)
+      setSelectedSessionId(null)
       return
     }
     setSessionCellFilter(null)
@@ -331,13 +382,17 @@ export function OperatorDashboard() {
   }
 
   function handleMapBackgroundClick() {
-    if (view === 'sessions' && selectedImsi) setSessionCellFilter(null)
+    if (view === 'sessions' && selectedImsi) {
+      setSessionCellFilter(null)
+      setSelectedSessionId(null)
+    }
   }
 
   function selectCellFromTable(cellId: string) {
     setSelectedCellId(cellId)
     setSelectedImsi(null)
     setSessionCellFilter(null)
+    setSelectedSessionId(null)
     setView('subscribers')
   }
 
@@ -346,6 +401,7 @@ export function OperatorDashboard() {
     setSelectedCellId(null)
     setSelectedImsi(null)
     setSessionCellFilter(null)
+    setSelectedSessionId(null)
     setTableImsiSearch('')
   }
 
@@ -353,11 +409,13 @@ export function OperatorDashboard() {
     setView('subscribers')
     setSelectedImsi(null)
     setSessionCellFilter(null)
+    setSelectedSessionId(null)
   }
 
   function openSubscriber(imsi: string) {
     setSelectedImsi(imsi)
     setSessionCellFilter(null)
+    setSelectedSessionId(null)
     setView('sessions')
   }
 
@@ -365,7 +423,17 @@ export function OperatorDashboard() {
     setSelectedCellId(null)
     setSelectedImsi(imsi)
     setSessionCellFilter(null)
+    setSelectedSessionId(null)
     setView('sessions')
+  }
+
+  function toggleCellDetails(cellId: string) {
+    setExpandedCellIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(cellId)) next.delete(cellId)
+      else next.add(cellId)
+      return next
+    })
   }
 
   const mapMode =
@@ -419,8 +487,6 @@ export function OperatorDashboard() {
         onSubscriberType={setSubscriberType}
         deviceType={deviceType}
         onDeviceType={setDeviceType}
-        cellAttributes={cellAttributes}
-        onCellAttributes={setCellAttributes}
         presets={filterPresets}
         onApplyPreset={handleApplyPreset}
         onSavePreset={handleSavePreset}
@@ -494,6 +560,7 @@ export function OperatorDashboard() {
                     <table className="minimal-table">
                       <thead>
                         <tr>
+                          <th className="row-expand-col" aria-label="Expand row details" />
                           <th>Cell name</th>
                           <th>Cell ID</th>
                           <th>With issue / in cohort</th>
@@ -502,21 +569,47 @@ export function OperatorDashboard() {
                       <tbody>
                         {visibleRanked.map((c) => {
                           const m = cellTableFailureMetrics(c, subscriberGlobalFilters)
+                          const isExpanded = expandedCellIds.has(c.id)
                           return (
-                            <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
-                              <td>{c.name}</td>
-                              <td className="muted">{c.id}</td>
-                              <td>
-                                <CellFootprintRatio
-                                  affected={m.affected}
-                                  total={m.total}
-                                  fromAnchors={m.fromAnchors}
-                                  noMatchTooltip="No subscribers match current global filters in this footprint."
-                                  ranTooltip={`No subscribers in this footprint for drill-down. RAN: ${c.setupAccessFailures} failures`}
-                                  issueDescriptor="setup/access failures"
-                                />
-                              </td>
-                            </tr>
+                            <Fragment key={c.id}>
+                              <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
+                                <td className="row-expand-col">
+                                  <button
+                                    type="button"
+                                    className="row-expand-btn"
+                                    aria-label={`${
+                                      isExpanded ? 'Collapse' : 'Expand'
+                                    } details for ${c.name}`}
+                                    aria-expanded={isExpanded}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      toggleCellDetails(c.id)
+                                    }}
+                                  >
+                                    {isExpanded ? '▾' : '▸'}
+                                  </button>
+                                </td>
+                                <td>{c.name}</td>
+                                <td className="muted">{c.id}</td>
+                                <td>
+                                  <CellFootprintRatio
+                                    affected={m.affected}
+                                    total={m.total}
+                                    fromAnchors={m.fromAnchors}
+                                    noMatchTooltip="No subscribers match current global filters in this footprint."
+                                    ranTooltip={`No subscribers in this footprint for drill-down. RAN: ${c.setupAccessFailures} failures`}
+                                    issueDescriptor="setup/access failures"
+                                  />
+                                </td>
+                              </tr>
+                              {isExpanded && (
+                                <tr className="cell-details-row" key={`${c.id}-detail`}>
+                                  <td colSpan={cellDetailColSpan('failure')}>
+                                    <CellDetailsPanel cell={c} />
+                                  </td>
+                                </tr>
+                              )}
+                            </Fragment>
                           )
                         })}
                       </tbody>
@@ -526,6 +619,7 @@ export function OperatorDashboard() {
                     <table className="minimal-table">
                       <thead>
                         <tr>
+                          <th className="row-expand-col" aria-label="Expand row details" />
                           <th>Cell name</th>
                           <th>Cell ID</th>
                           <th>With issue / in cohort</th>
@@ -534,21 +628,47 @@ export function OperatorDashboard() {
                       <tbody>
                         {visibleRanked.map((c) => {
                           const m = cellTableCallDropMetrics(c, subscriberGlobalFilters)
+                          const isExpanded = expandedCellIds.has(c.id)
                           return (
-                            <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
-                              <td>{c.name}</td>
-                              <td className="muted">{c.id}</td>
-                              <td>
-                                <CellFootprintRatio
-                                  affected={m.affected}
-                                  total={m.total}
-                                  fromAnchors={m.fromAnchors}
-                                  noMatchTooltip="No subscribers match current global filters in this footprint."
-                                  ranTooltip={`No subscribers in this footprint for drill-down. RAN: ${c.callDrops} drops`}
-                                  issueDescriptor="call drops"
-                                />
-                              </td>
-                            </tr>
+                            <Fragment key={c.id}>
+                              <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
+                                <td className="row-expand-col">
+                                  <button
+                                    type="button"
+                                    className="row-expand-btn"
+                                    aria-label={`${
+                                      isExpanded ? 'Collapse' : 'Expand'
+                                    } details for ${c.name}`}
+                                    aria-expanded={isExpanded}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      toggleCellDetails(c.id)
+                                    }}
+                                  >
+                                    {isExpanded ? '▾' : '▸'}
+                                  </button>
+                                </td>
+                                <td>{c.name}</td>
+                                <td className="muted">{c.id}</td>
+                                <td>
+                                  <CellFootprintRatio
+                                    affected={m.affected}
+                                    total={m.total}
+                                    fromAnchors={m.fromAnchors}
+                                    noMatchTooltip="No subscribers match current global filters in this footprint."
+                                    ranTooltip={`No subscribers in this footprint for drill-down. RAN: ${c.callDrops} drops`}
+                                    issueDescriptor="call drops"
+                                  />
+                                </td>
+                              </tr>
+                              {isExpanded && (
+                                <tr className="cell-details-row" key={`${c.id}-detail`}>
+                                  <td colSpan={cellDetailColSpan('callDrop')}>
+                                    <CellDetailsPanel cell={c} />
+                                  </td>
+                                </tr>
+                              )}
+                            </Fragment>
                           )
                         })}
                       </tbody>
@@ -558,6 +678,7 @@ export function OperatorDashboard() {
                     <table className="minimal-table">
                       <thead>
                         <tr>
+                          <th className="row-expand-col" aria-label="Expand row details" />
                           <th>Cell name</th>
                           <th>Cell ID</th>
                           <th>DL: with issue / in cohort</th>
@@ -568,29 +689,55 @@ export function OperatorDashboard() {
                         {visibleRanked.map((c) => {
                           const dl = cellTablePayloadDlMetrics(c, subscriberGlobalFilters)
                           const ul = cellTablePayloadUlMetrics(c, subscriberGlobalFilters)
+                          const isExpanded = expandedCellIds.has(c.id)
                           return (
-                            <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
-                              <td>{c.name}</td>
-                              <td className="muted">{c.id}</td>
-                              <td>
-                                <CellFootprintRatio
-                                  affected={dl.affected}
-                                  total={dl.total}
-                                  fromAnchors={dl.fromAnchors}
-                                  noMatchTooltip="No subscribers match current global filters in this footprint."
-                                  ranTooltip={`No subscribers in this footprint for drill-down. RAN DL: ${c.dlMbps} Mbps`}
-                                />
-                              </td>
-                              <td>
-                                <CellFootprintRatio
-                                  affected={ul.affected}
-                                  total={ul.total}
-                                  fromAnchors={ul.fromAnchors}
-                                  noMatchTooltip="No subscribers match current global filters in this footprint."
-                                  ranTooltip={`No subscribers in this footprint for drill-down. RAN UL: ${c.ulMbps} Mbps`}
-                                />
-                              </td>
-                            </tr>
+                            <Fragment key={c.id}>
+                              <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
+                                <td className="row-expand-col">
+                                  <button
+                                    type="button"
+                                    className="row-expand-btn"
+                                    aria-label={`${
+                                      isExpanded ? 'Collapse' : 'Expand'
+                                    } details for ${c.name}`}
+                                    aria-expanded={isExpanded}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      toggleCellDetails(c.id)
+                                    }}
+                                  >
+                                    {isExpanded ? '▾' : '▸'}
+                                  </button>
+                                </td>
+                                <td>{c.name}</td>
+                                <td className="muted">{c.id}</td>
+                                <td>
+                                  <CellFootprintRatio
+                                    affected={dl.affected}
+                                    total={dl.total}
+                                    fromAnchors={dl.fromAnchors}
+                                    noMatchTooltip="No subscribers match current global filters in this footprint."
+                                    ranTooltip={`No subscribers in this footprint for drill-down. RAN DL: ${c.dlMbps} Mbps`}
+                                  />
+                                </td>
+                                <td>
+                                  <CellFootprintRatio
+                                    affected={ul.affected}
+                                    total={ul.total}
+                                    fromAnchors={ul.fromAnchors}
+                                    noMatchTooltip="No subscribers match current global filters in this footprint."
+                                    ranTooltip={`No subscribers in this footprint for drill-down. RAN UL: ${c.ulMbps} Mbps`}
+                                  />
+                                </td>
+                              </tr>
+                              {isExpanded && (
+                                <tr className="cell-details-row" key={`${c.id}-detail`}>
+                                  <td colSpan={cellDetailColSpan('payload')}>
+                                    <CellDetailsPanel cell={c} />
+                                  </td>
+                                </tr>
+                              )}
+                            </Fragment>
                           )
                         })}
                       </tbody>
@@ -600,6 +747,7 @@ export function OperatorDashboard() {
                     <table className="minimal-table">
                       <thead>
                         <tr>
+                          <th className="row-expand-col" aria-label="Expand row details" />
                           <th>Cell name</th>
                           <th>Cell ID</th>
                           <th>Total handovers</th>
@@ -609,21 +757,47 @@ export function OperatorDashboard() {
                       <tbody>
                         {visibleRanked.map((c) => {
                           const m = cellTableHoPctMetrics(c, subscriberGlobalFilters)
+                          const isExpanded = expandedCellIds.has(c.id)
                           return (
-                            <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
-                              <td>{c.name}</td>
-                              <td className="muted">{c.id}</td>
-                              <td>{c.totalHandovers.toLocaleString()}</td>
-                              <td>
-                                <CellFootprintRatio
-                                  affected={m.affected}
-                                  total={m.total}
-                                  fromAnchors={m.fromAnchors}
-                                  noMatchTooltip="No subscribers match current global filters in this footprint."
-                                  ranTooltip={`No subscribers in this footprint for drill-down. RAN HO: ${c.hoSuccessPct.toFixed(1)}%`}
-                                />
-                              </td>
-                            </tr>
+                            <Fragment key={c.id}>
+                              <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
+                                <td className="row-expand-col">
+                                  <button
+                                    type="button"
+                                    className="row-expand-btn"
+                                    aria-label={`${
+                                      isExpanded ? 'Collapse' : 'Expand'
+                                    } details for ${c.name}`}
+                                    aria-expanded={isExpanded}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      toggleCellDetails(c.id)
+                                    }}
+                                  >
+                                    {isExpanded ? '▾' : '▸'}
+                                  </button>
+                                </td>
+                                <td>{c.name}</td>
+                                <td className="muted">{c.id}</td>
+                                <td>{c.totalHandovers.toLocaleString()}</td>
+                                <td>
+                                  <CellFootprintRatio
+                                    affected={m.affected}
+                                    total={m.total}
+                                    fromAnchors={m.fromAnchors}
+                                    noMatchTooltip="No subscribers match current global filters in this footprint."
+                                    ranTooltip={`No subscribers in this footprint for drill-down. RAN HO: ${c.hoSuccessPct.toFixed(1)}%`}
+                                  />
+                                </td>
+                              </tr>
+                              {isExpanded && (
+                                <tr className="cell-details-row" key={`${c.id}-detail`}>
+                                  <td colSpan={cellDetailColSpan('handover')}>
+                                    <CellDetailsPanel cell={c} />
+                                  </td>
+                                </tr>
+                              )}
+                            </Fragment>
                           )
                         })}
                       </tbody>
@@ -687,7 +861,6 @@ export function OperatorDashboard() {
                         <th>Signal quality</th>
                         <th>Throughput</th>
                         <th>Connectivity</th>
-                        <th>Packet metrics</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -695,10 +868,16 @@ export function OperatorDashboard() {
                         <tr
                           key={s.id}
                           className={
-                            sessionCellFilter && s.cellId === sessionCellFilter
-                              ? 'session-row--cell-focus'
-                              : undefined
+                            [
+                              sessionCellFilter && s.cellId === sessionCellFilter
+                                ? 'session-row--cell-focus'
+                                : '',
+                              selectedSessionId === s.id ? 'session-row--selected' : '',
+                            ]
+                              .filter(Boolean)
+                              .join(' ') || undefined
                           }
+                          onClick={() => setSelectedSessionId(s.id)}
                         >
                           <td className="mono">{s.id}</td>
                           <td className="muted">
@@ -707,7 +886,6 @@ export function OperatorDashboard() {
                           <td>{s.signalQuality.toFixed(2)}</td>
                           <td>{s.throughputMbps} Mbps</td>
                           <td>{s.connectivity}</td>
-                          <td>{s.packetLossPct.toFixed(2)}% loss</td>
                         </tr>
                       ))}
                     </tbody>
@@ -727,6 +905,10 @@ export function OperatorDashboard() {
                 mode={mapMode}
                 selectedCellId={selectedCellId}
                 subscriberImsi={selectedImsi}
+                activeTab={activeTab}
+                sessions={sessions}
+                selectedSessionId={selectedSessionId}
+                onSessionSelect={setSelectedSessionId}
                 sessionTableCellFilter={sessionCellFilter}
                 showHoverKpis={view === 'sessions'}
                 embed={view === 'sessions' ? 'compact' : 'full'}
@@ -749,14 +931,14 @@ export function OperatorDashboard() {
                         initialDimension={{ width: 360, height: 220 }}
                       >
                         <LineChart data={trendData}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#e8e8e8" />
+                          <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
                           <XAxis dataKey="i" tick={{ fontSize: 11 }} />
                           <YAxis tick={{ fontSize: 11 }} unit=" Mbps" />
                           <Tooltip />
                           <Line
                             type="monotone"
                             dataKey="tp"
-                            stroke="#2563eb"
+                            stroke="#60a5fa"
                             dot={false}
                             strokeWidth={2}
                           />
@@ -771,7 +953,7 @@ export function OperatorDashboard() {
                         initialDimension={{ width: 360, height: 220 }}
                       >
                         <ScatterChart>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#e8e8e8" />
+                          <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
                           <XAxis
                             dataKey="x"
                             name="Signal"
@@ -786,7 +968,7 @@ export function OperatorDashboard() {
                             tick={{ fontSize: 11 }}
                           />
                           <Tooltip cursor={{ strokeDasharray: '3 3' }} />
-                          <Scatter data={scatterData} fill="#0d9488" />
+                          <Scatter data={scatterData} fill="#2dd4bf" />
                         </ScatterChart>
                       </ResponsiveContainer>
                     </figure>
@@ -804,8 +986,8 @@ export function OperatorDashboard() {
                             className="heatmap-cell"
                             title={cell.label}
                             style={{
-                              opacity: 0.35 + (cell.v / 3) * 0.65,
-                              background: `hsl(220, 45%, ${100 - cell.v * 18}%)`,
+                              opacity: 0.32 + (cell.v / 3) * 0.5,
+                              background: `hsl(220, 55%, ${38 - cell.v * 8}%)`,
                             }}
                           />
                         ))}
@@ -830,6 +1012,7 @@ export function OperatorDashboard() {
                           setComparePeriodB(e.target.value as ComparePeriodOption)
                         }
                       >
+                        <option value="15m">Last 15 minutes</option>
                         <option value="1h">Last 1 hour</option>
                         <option value="24h">Last 24 hours</option>
                         <option value="7d">Last 7 days</option>
@@ -872,15 +1055,15 @@ export function OperatorDashboard() {
                           data={comparisonBarData}
                           margin={{ top: 12, right: 16, left: 8, bottom: 56 }}
                         >
-                          <CartesianGrid strokeDasharray="3 3" stroke="#e8e8e8" vertical={false} />
+                          <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
                           <XAxis
                             dataKey="name"
-                            tick={{ fontSize: 12, fill: '#374151' }}
-                            axisLine={{ stroke: '#e5e7eb' }}
+                            tick={{ fontSize: 12, fill: '#cbd5e1' }}
+                            axisLine={{ stroke: '#475569' }}
                           />
-                          <YAxis tick={{ fontSize: 11 }} axisLine={{ stroke: '#e5e7eb' }} />
+                          <YAxis tick={{ fontSize: 11, fill: '#cbd5e1' }} axisLine={{ stroke: '#475569' }} />
                           <Tooltip
-                            cursor={{ fill: 'rgba(37, 99, 235, 0.06)' }}
+                            cursor={{ fill: 'rgba(96, 165, 250, 0.15)' }}
                             content={({ active, payload }) => {
                               if (!active || !payload?.[0]) return null
                               const d = payload[0].payload as (typeof comparisonBarData)[0]
@@ -897,7 +1080,7 @@ export function OperatorDashboard() {
                           />
                           <Bar dataKey="value" radius={[4, 4, 0, 0]} maxBarSize={72}>
                             {comparisonBarData.map((_, i) => (
-                              <Cell key={i} fill={i === 0 ? '#2563eb' : '#64748b'} />
+                              <Cell key={i} fill={i === 0 ? '#60a5fa' : '#94a3b8'} />
                             ))}
                           </Bar>
                         </BarChart>

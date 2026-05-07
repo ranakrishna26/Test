@@ -10,6 +10,17 @@ export type TableTab = 'failure' | 'callDrop' | 'payload' | 'handover'
 export interface Cell {
   id: string
   name: string
+  siteCode: string
+  sector: string
+  azimuthDeg: number
+  pci: number
+  nrArfcn: number
+  band: string
+  bandwidthMhz: number
+  tac: number
+  antennaHeightM: number
+  electricalTiltDeg: number
+  vendor: string
   setupAccessFailures: number
   callDrops: number
   dlMbps: number
@@ -23,7 +34,7 @@ export interface Cell {
 
 export type SubscriberSegment = 'consumer' | 'enterprise' | 'iot' | 'vip'
 export type SubscriberDevice = 'phone' | 'cpe' | 'module'
-export type SubscriberTimeHorizon = '1h' | '24h' | '7d' | '30d'
+export type SubscriberTimeHorizon = '15m' | '1h' | '24h' | '7d' | '30d'
 
 export interface Subscriber {
   imsi: string
@@ -61,110 +72,368 @@ export interface SessionRow {
   handoverSuccess: boolean
 }
 
+export const VIP_HIGHWAY_IMSI = '310410******777777'
+
 export const CELLS: Cell[] = [
   {
     id: 'NR-1021',
-    name: 'Alpha-21',
+    name: 'LDN-Paddington-GW',
     setupAccessFailures: 42,
     callDrops: 128,
     dlMbps: 38,
     ulMbps: 9.2,
     totalHandovers: 2100,
     hoSuccessPct: 91.2,
-    mapX: 22,
-    mapY: 32,
-    neighborIds: ['NR-4103', 'NR-8842'],
+    siteCode: 'LDN001',
+    sector: 'S1',
+    azimuthDeg: 70,
+    pci: 101,
+    nrArfcn: 636666,
+    band: 'n78',
+    bandwidthMhz: 100,
+    tac: 41021,
+    antennaHeightM: 28,
+    electricalTiltDeg: 6,
+    vendor: 'Nokia',
+    mapX: 24,
+    mapY: 46,
+    neighborIds: ['NR-4103', 'NR-2201', 'NR-4478'],
   },
   {
     id: 'NR-4103',
-    name: 'Delta-09',
+    name: 'LDN-MarbleArch-A40',
     setupAccessFailures: 31,
     callDrops: 96,
     dlMbps: 44,
     ulMbps: 11.0,
     totalHandovers: 1840,
     hoSuccessPct: 88.4,
-    mapX: 58,
-    mapY: 38,
-    neighborIds: ['NR-1021', 'NR-6002', 'NR-5520'],
+    siteCode: 'LDN002',
+    sector: 'S2',
+    azimuthDeg: 92,
+    pci: 123,
+    nrArfcn: 636834,
+    band: 'n78',
+    bandwidthMhz: 100,
+    tac: 41022,
+    antennaHeightM: 31,
+    electricalTiltDeg: 5,
+    vendor: 'Ericsson',
+    mapX: 38,
+    mapY: 46,
+    neighborIds: ['NR-1021', 'NR-6002', 'NR-8842'],
   },
   {
     id: 'NR-8842',
-    name: 'Beta-14',
+    name: 'LDN-OxfordCircus-Central',
     setupAccessFailures: 18,
     callDrops: 54,
     dlMbps: 62,
     ulMbps: 14.5,
     totalHandovers: 1200,
     hoSuccessPct: 95.1,
-    mapX: 40,
-    mapY: 58,
-    neighborIds: ['NR-1021', 'NR-9934'],
+    siteCode: 'LDN003',
+    sector: 'S1',
+    azimuthDeg: 108,
+    pci: 147,
+    nrArfcn: 637002,
+    band: 'n78',
+    bandwidthMhz: 100,
+    tac: 41023,
+    antennaHeightM: 30,
+    electricalTiltDeg: 6,
+    vendor: 'Nokia',
+    mapX: 56,
+    mapY: 47,
+    neighborIds: ['NR-4103', 'NR-5520', 'NR-9934', 'NR-3305', 'NR-6612'],
   },
   {
     id: 'NR-5520',
-    name: 'Gamma-07',
+    name: 'LDN-BondStreet-West',
     setupAccessFailures: 12,
     callDrops: 41,
     dlMbps: 71,
     ulMbps: 16.2,
     totalHandovers: 980,
     hoSuccessPct: 96.8,
-    mapX: 72,
-    mapY: 62,
-    neighborIds: ['NR-4103', 'NR-7710'],
+    siteCode: 'LDN004',
+    sector: 'S3',
+    azimuthDeg: 122,
+    pci: 165,
+    nrArfcn: 637170,
+    band: 'n78',
+    bandwidthMhz: 100,
+    tac: 41024,
+    antennaHeightM: 27,
+    electricalTiltDeg: 4,
+    vendor: 'Samsung',
+    mapX: 68,
+    mapY: 40,
+    neighborIds: ['NR-8842', 'NR-6002', 'NR-7710', 'NR-3305'],
   },
   {
     id: 'NR-6002',
-    name: 'Theta-08',
+    name: 'LDN-RegentStreet-North',
     setupAccessFailures: 26,
     callDrops: 72,
     dlMbps: 33,
     ulMbps: 7.8,
     totalHandovers: 1500,
     hoSuccessPct: 89.0,
-    mapX: 78,
-    mapY: 22,
-    neighborIds: ['NR-4103'],
+    siteCode: 'LDN005',
+    sector: 'S2',
+    azimuthDeg: 188,
+    pci: 182,
+    nrArfcn: 635910,
+    band: 'n78',
+    bandwidthMhz: 80,
+    tac: 41025,
+    antennaHeightM: 34,
+    electricalTiltDeg: 7,
+    vendor: 'Ericsson',
+    mapX: 48,
+    mapY: 34,
+    neighborIds: ['NR-4103', 'NR-2201', 'NR-5520'],
   },
   {
     id: 'NR-9934',
-    name: 'Zeta-12',
+    name: 'LDN-Soho-Core',
     setupAccessFailures: 9,
     callDrops: 22,
     dlMbps: 88,
     ulMbps: 19.0,
     totalHandovers: 760,
     hoSuccessPct: 97.9,
-    mapX: 28,
-    mapY: 72,
-    neighborIds: ['NR-8842'],
+    siteCode: 'LDN006',
+    sector: 'S1',
+    azimuthDeg: 135,
+    pci: 207,
+    nrArfcn: 637338,
+    band: 'n78',
+    bandwidthMhz: 100,
+    tac: 41026,
+    antennaHeightM: 29,
+    electricalTiltDeg: 5,
+    vendor: 'Nokia',
+    mapX: 76,
+    mapY: 45,
+    neighborIds: ['NR-8842', 'NR-7710', 'NR-5588', 'NR-7744'],
   },
   {
     id: 'NR-7710',
-    name: 'Eta-45',
+    name: 'LDN-Mayfair-East',
     setupAccessFailures: 5,
     callDrops: 14,
     dlMbps: 102,
     ulMbps: 22.0,
     totalHandovers: 540,
     hoSuccessPct: 98.6,
-    mapX: 55,
-    mapY: 82,
-    neighborIds: ['NR-5520'],
+    siteCode: 'LDN007',
+    sector: 'S3',
+    azimuthDeg: 154,
+    pci: 229,
+    nrArfcn: 637506,
+    band: 'n78',
+    bandwidthMhz: 100,
+    tac: 41027,
+    antennaHeightM: 26,
+    electricalTiltDeg: 4,
+    vendor: 'Ericsson',
+    mapX: 83,
+    mapY: 30,
+    neighborIds: ['NR-5520', 'NR-9934', 'NR-5588'],
   },
   {
     id: 'NR-2201',
-    name: 'Epsilon-33',
+    name: 'LDN-Marylebone-Exchange',
     setupAccessFailures: 15,
     callDrops: 38,
     dlMbps: 55,
     ulMbps: 12.0,
     totalHandovers: 890,
     hoSuccessPct: 94.0,
-    mapX: 12,
+    siteCode: 'LDN008',
+    sector: 'S2',
+    azimuthDeg: 246,
+    pci: 244,
+    nrArfcn: 635742,
+    band: 'n78',
+    bandwidthMhz: 80,
+    tac: 41028,
+    antennaHeightM: 33,
+    electricalTiltDeg: 7,
+    vendor: 'Nokia',
+    mapX: 30,
+    mapY: 32,
+    neighborIds: ['NR-1021', 'NR-6002', 'NR-4478'],
+  },
+  {
+    id: 'NR-3305',
+    name: 'LDN-Fitzrovia-Central',
+    setupAccessFailures: 21,
+    callDrops: 66,
+    dlMbps: 57,
+    ulMbps: 12.8,
+    totalHandovers: 1330,
+    hoSuccessPct: 90.7,
+    siteCode: 'LDN009',
+    sector: 'S1',
+    azimuthDeg: 116,
+    pci: 267,
+    nrArfcn: 637086,
+    band: 'n78',
+    bandwidthMhz: 100,
+    tac: 41029,
+    antennaHeightM: 25,
+    electricalTiltDeg: 5,
+    vendor: 'Ericsson',
+    mapX: 65,
     mapY: 48,
-    neighborIds: ['NR-1021'],
+    neighborIds: ['NR-8842', 'NR-5520', 'NR-9934', 'NR-6612'],
+  },
+  {
+    id: 'NR-4478',
+    name: 'LDN-EdgwareRoad-South',
+    setupAccessFailures: 19,
+    callDrops: 49,
+    dlMbps: 52,
+    ulMbps: 11.6,
+    totalHandovers: 1180,
+    hoSuccessPct: 92.3,
+    siteCode: 'LDN010',
+    sector: 'S3',
+    azimuthDeg: 258,
+    pci: 283,
+    nrArfcn: 635574,
+    band: 'n78',
+    bandwidthMhz: 80,
+    tac: 41030,
+    antennaHeightM: 32,
+    electricalTiltDeg: 8,
+    vendor: 'Samsung',
+    mapX: 15,
+    mapY: 44,
+    neighborIds: ['NR-1021', 'NR-2201'],
+  },
+  {
+    id: 'NR-5588',
+    name: 'LDN-Holborn-Link',
+    setupAccessFailures: 24,
+    callDrops: 71,
+    dlMbps: 47,
+    ulMbps: 10.8,
+    totalHandovers: 1410,
+    hoSuccessPct: 89.8,
+    siteCode: 'LDN011',
+    sector: 'S2',
+    azimuthDeg: 142,
+    pci: 301,
+    nrArfcn: 637674,
+    band: 'n78',
+    bandwidthMhz: 100,
+    tac: 41031,
+    antennaHeightM: 28,
+    electricalTiltDeg: 5,
+    vendor: 'Nokia',
+    mapX: 88,
+    mapY: 41,
+    neighborIds: ['NR-9934', 'NR-7710', 'NR-7744', 'NR-9093'],
+  },
+  {
+    id: 'NR-6612',
+    name: 'LDN-Farringdon-East',
+    setupAccessFailures: 16,
+    callDrops: 44,
+    dlMbps: 61,
+    ulMbps: 13.4,
+    totalHandovers: 1240,
+    hoSuccessPct: 93.4,
+    siteCode: 'LDN012',
+    sector: 'S1',
+    azimuthDeg: 128,
+    pci: 326,
+    nrArfcn: 637254,
+    band: 'n78',
+    bandwidthMhz: 100,
+    tac: 41032,
+    antennaHeightM: 27,
+    electricalTiltDeg: 6,
+    vendor: 'Ericsson',
+    mapX: 58,
+    mapY: 43,
+    neighborIds: ['NR-8842', 'NR-3305', 'NR-5520', 'NR-7744'],
+  },
+  {
+    id: 'NR-7744',
+    name: 'LDN-Barbican-South',
+    setupAccessFailures: 20,
+    callDrops: 58,
+    dlMbps: 53,
+    ulMbps: 11.9,
+    totalHandovers: 1370,
+    hoSuccessPct: 91.1,
+    siteCode: 'LDN013',
+    sector: 'S3',
+    azimuthDeg: 164,
+    pci: 349,
+    nrArfcn: 637842,
+    band: 'n78',
+    bandwidthMhz: 100,
+    tac: 41033,
+    antennaHeightM: 24,
+    electricalTiltDeg: 4,
+    vendor: 'Nokia',
+    mapX: 79,
+    mapY: 44,
+    neighborIds: ['NR-9934', 'NR-5588', 'NR-6612', 'NR-9093'],
+  },
+  {
+    id: 'NR-8851',
+    name: 'LDN-EustonRoad-West',
+    setupAccessFailures: 14,
+    callDrops: 36,
+    dlMbps: 64,
+    ulMbps: 14.0,
+    totalHandovers: 1120,
+    hoSuccessPct: 94.1,
+    siteCode: 'LDN014',
+    sector: 'S2',
+    azimuthDeg: 232,
+    pci: 371,
+    nrArfcn: 635406,
+    band: 'n78',
+    bandwidthMhz: 80,
+    tac: 41034,
+    antennaHeightM: 35,
+    electricalTiltDeg: 8,
+    vendor: 'Ericsson',
+    mapX: 33,
+    mapY: 42,
+    neighborIds: ['NR-2201', 'NR-4103', 'NR-6002', 'NR-4478'],
+  },
+  {
+    id: 'NR-9093',
+    name: 'LDN-LiverpoolStreet-North',
+    setupAccessFailures: 23,
+    callDrops: 63,
+    dlMbps: 50,
+    ulMbps: 10.9,
+    totalHandovers: 1450,
+    hoSuccessPct: 90.2,
+    siteCode: 'LDN015',
+    sector: 'S1',
+    azimuthDeg: 176,
+    pci: 395,
+    nrArfcn: 638010,
+    band: 'n78',
+    bandwidthMhz: 100,
+    tac: 41035,
+    antennaHeightM: 26,
+    electricalTiltDeg: 5,
+    vendor: 'Samsung',
+    mapX: 86,
+    mapY: 38,
+    neighborIds: ['NR-7744', 'NR-5588', 'NR-7710'],
   },
 ]
 
@@ -216,8 +485,9 @@ function pickDevice(u: number, segment: SubscriberSegment): SubscriberDevice {
 }
 
 function pickTimeHorizon(u: number): SubscriberTimeHorizon {
-  if (u < 0.12) return '1h'
-  if (u < 0.52) return '24h'
+  if (u < 0.06) return '15m'
+  if (u < 0.2) return '1h'
+  if (u < 0.58) return '24h'
   if (u < 0.82) return '7d'
   return '30d'
 }
@@ -241,7 +511,8 @@ function buildPlaceholderSubscribers(): Subscriber[] {
       let timeHorizon = pickTimeHorizon(u2)
       if (segment === 'vip') {
         const ut = mix32(seed + 6) / 2 ** 32
-        if (ut < 0.5) timeHorizon = '24h'
+        if (ut < 0.14) timeHorizon = '15m'
+        else if (ut < 0.54) timeHorizon = '24h'
         else if (ut < 0.82) timeHorizon = '7d'
         else if (ut < 0.94) timeHorizon = '30d'
         else timeHorizon = '1h'
@@ -304,6 +575,23 @@ function buildPlaceholderSubscribers(): Subscriber[] {
       })
     }
   }
+  const vipAnchor = CELL_MAP['NR-1021']
+  if (out.length > 0 && vipAnchor) {
+    out[0] = {
+      imsi: VIP_HIGHWAY_IMSI,
+      cellId: vipAnchor.id,
+      cellName: vipAnchor.name,
+      sessions: 18,
+      setupAccessFailures: 6,
+      callDrops: 3,
+      dlMbps: 49,
+      ulMbps: 12.6,
+      hoSuccessPct: 88.9,
+      segment: 'vip',
+      device: 'phone',
+      timeHorizon: '15m',
+    }
+  }
   return out
 }
 
@@ -316,14 +604,15 @@ export function subscribersForFootprint(cellId: string): Subscriber[] {
 }
 
 const TIME_RANGE_ORDER: Record<SubscriberTimeHorizon, number> = {
-  '1h': 1,
-  '24h': 2,
-  '7d': 3,
-  '30d': 4,
+  '15m': 1,
+  '1h': 2,
+  '24h': 3,
+  '7d': 4,
+  '30d': 5,
 }
 
 function timeRangeCoversSubscriber(selected: string, sub: SubscriberTimeHorizon): boolean {
-  const oSel = TIME_RANGE_ORDER[selected as SubscriberTimeHorizon] ?? 2
+  const oSel = TIME_RANGE_ORDER[selected as SubscriberTimeHorizon] ?? 3
   const oSub = TIME_RANGE_ORDER[sub]
   return oSel >= oSub
 }
@@ -450,6 +739,65 @@ export function cellTableHoPctMetrics(
 }
 
 function sessionsForImsi(imsi: string): SessionRow[] {
+  if (imsi === VIP_HIGHWAY_IMSI) {
+    const path = [
+      { cellId: 'NR-4478', phase: 'approach' },
+      { cellId: 'NR-2201', phase: 'approach' },
+      { cellId: 'NR-1021', phase: 'merge' },
+      { cellId: 'NR-1021', phase: 'highway' },
+      { cellId: 'NR-4103', phase: 'handover' },
+      { cellId: 'NR-4103', phase: 'highway' },
+      { cellId: 'NR-8842', phase: 'handover' },
+      { cellId: 'NR-8842', phase: 'highway' },
+      { cellId: 'NR-6612', phase: 'handover' },
+      { cellId: 'NR-6612', phase: 'highway' },
+      { cellId: 'NR-3305', phase: 'handover' },
+      { cellId: 'NR-3305', phase: 'highway' },
+      { cellId: 'NR-6612', phase: 'handover' },
+      { cellId: 'NR-8842', phase: 'recover' },
+      { cellId: 'NR-4103', phase: 'recover' },
+      { cellId: 'NR-1021', phase: 'exit' },
+      { cellId: 'NR-2201', phase: 'exit' },
+      { cellId: 'NR-4478', phase: 'exit' },
+    ] as const
+
+    return path.map((step, i) => {
+      const cell = CELL_MAP[step.cellId]
+      const handoverAttempted = i > 0 && path[i - 1].cellId !== step.cellId
+      const stressed = step.phase === 'handover' || step.phase === 'merge'
+      const recovering = step.phase === 'recover' || step.phase === 'exit'
+      const handoverSuccess = handoverAttempted ? i % 6 !== 0 : true
+      const setupAccessFailures = stressed ? (handoverSuccess ? 1 : 3) : recovering ? 0 : 0
+      const callDrops = stressed ? (handoverSuccess ? 0 : 1) : 0
+      const throughputMbps = stressed
+        ? 18 + (i % 3) * 4
+        : recovering
+          ? 36 + (i % 4) * 5
+          : 44 + (i % 5) * 6
+      const signalQuality = stressed
+        ? 2.4 + (i % 2) * 0.3
+        : recovering
+          ? 3.1 + (i % 3) * 0.25
+          : 3.7 + (i % 3) * 0.28
+      const packetLossPct = stressed ? 2.2 + (i % 3) * 0.55 : recovering ? 0.9 : 0.45
+
+      return {
+        id: `SES-VIP-${1000 + i}`,
+        signalQuality,
+        throughputMbps,
+        ulMbps: Math.round(throughputMbps * 0.24 * 10) / 10,
+        connectivity: stressed ? 'Intermittent' : recovering ? 'Degraded' : 'Stable',
+        packetLossPct,
+        cellId: step.cellId,
+        cellName: cell?.name ?? step.cellId,
+        setupAccessFailures,
+        callDrops,
+        handoverAttempted,
+        handoverSuccess,
+      }
+    })
+  }
+
   const base = imsi.slice(-3)
   const n = parseInt(base, 10) || 0
   const cells = ['NR-1021', 'NR-4103', 'NR-8842', 'NR-6002']
@@ -615,10 +963,12 @@ export function mapCellSummaryLines(
   return lines
 }
 
-export type ComparePeriodOption = '1h' | '24h' | '7d' | '30d' | 'custom'
+export type ComparePeriodOption = '15m' | '1h' | '24h' | '7d' | '30d' | 'custom'
 
 export function globalTimeRangeLabel(range: string): string {
   switch (range) {
+    case '15m':
+      return 'Last 15 minutes'
     case '1h':
       return 'Last 1 hour'
     case '24h':
@@ -659,6 +1009,8 @@ function compareWindowWeight(
   customEnd: string,
 ): number {
   switch (option) {
+    case '15m':
+      return 0.12
     case '1h':
       return 0.22
     case '24h':

@@ -8,8 +8,6 @@ type Props = {
   onSubscriberType: (v: string) => void
   deviceType: string
   onDeviceType: (v: string) => void
-  cellAttributes: string
-  onCellAttributes: (v: string) => void
   presets: SavedFilterPreset[]
   onApplyPreset: (id: string) => void
   onSavePreset: (name: string) => void
@@ -23,8 +21,6 @@ export function GlobalFiltersBar({
   onSubscriberType,
   deviceType,
   onDeviceType,
-  cellAttributes,
-  onCellAttributes,
   presets,
   onApplyPreset,
   onSavePreset,
@@ -41,6 +37,7 @@ export function GlobalFiltersBar({
           <label className="filter-item">
             <span>Time range</span>
             <select value={timeRange} onChange={(e) => onTimeRange(e.target.value)}>
+              <option value="15m">Last 15 minutes</option>
               <option value="1h">Last 1 hour</option>
               <option value="24h">Last 24 hours</option>
               <option value="7d">Last 7 days</option>
@@ -65,15 +62,6 @@ export function GlobalFiltersBar({
               <option value="cpe">CPE</option>
               <option value="module">Module</option>
             </select>
-          </label>
-          <label className="filter-item filter-cell-attrs">
-            <span>Cell attributes</span>
-            <input
-              type="text"
-              placeholder="Band, site, vendor…"
-              value={cellAttributes}
-              onChange={(e) => onCellAttributes(e.target.value)}
-            />
           </label>
         </div>
 

@@ -704,7 +704,8 @@ export function OperatorMap({
       setMapError('Map unavailable: missing VITE_MAPBOX_ACCESS_TOKEN')
       return
     }
-    const mapStyle = import.meta.env.VITE_MAPBOX_STYLE_URL ?? MAPBOX_FALLBACK_STYLE
+    const configuredStyle = (import.meta.env.VITE_MAPBOX_STYLE_URL ?? '').trim()
+    const mapStyle = /dark/i.test(configuredStyle) ? configuredStyle : MAPBOX_FALLBACK_STYLE
     const avgX = CELLS.reduce((a, c) => a + c.mapX, 0) / CELLS.length
     const avgY = CELLS.reduce((a, c) => a + c.mapY, 0) / CELLS.length
     const center = mapXYToLngLat(avgX, avgY)

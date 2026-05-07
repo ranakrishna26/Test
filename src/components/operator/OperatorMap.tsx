@@ -700,17 +700,28 @@ export function OperatorMap({
       mapboxgl.accessToken =
         import.meta.env.VITE_MAPBOX_ACCESS_TOKEN ?? MAPBOX_FALLBACK_ACCESS_TOKEN
     }
+    if (!mapboxgl.accessToken) {
+      setMapError('Map unavailable: missing VITE_MAPBOX_ACCESS_TOKEN')
+      return
+    }
     const mapStyle = import.meta.env.VITE_MAPBOX_STYLE_URL ?? MAPBOX_FALLBACK_STYLE
     const avgX = CELLS.reduce((a, c) => a + c.mapX, 0) / CELLS.length
     const avgY = CELLS.reduce((a, c) => a + c.mapY, 0) / CELLS.length
     const center = mapXYToLngLat(avgX, avgY)
-    const map = new mapboxgl.Map({
-      container: mapElRef.current,
-      style: mapStyle,
-      center,
-      zoom: 12.2,
-      attributionControl: false,
-    })
+    let map: mapboxgl.Map
+    try {
+      map = new mapboxgl.Map({
+        container: mapElRef.current,
+        style: mapStyle,
+        center,
+        zoom: 12.2,
+        attributionControl: false,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Map initialization failed'
+      setMapError(message)
+      return
+    }
     mapRef.current = map
     map.on('error', (event) => {
       const message = event.error?.message ?? 'Map rendering error'

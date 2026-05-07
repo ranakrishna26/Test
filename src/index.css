@@ -945,6 +945,19 @@ html {
   background: #0b1220;
 }
 
+.minimal-table.session-table tbody tr.session-row--selected {
+  background: rgba(245, 158, 11, 0.2);
+  box-shadow: inset 3px 0 0 #f59e0b;
+}
+
+.minimal-table.session-table tbody tr.session-row--selected td {
+  color: #f8fafc;
+}
+
+.minimal-table.session-table tbody tr.session-row--selected:hover {
+  background: rgba(245, 158, 11, 0.26);
+}
+
 .session-cell-filter-banner {
   margin: 0.35rem 0 0.5rem;
   padding: 0.45rem 0.6rem;
@@ -1131,6 +1144,26 @@ html {
 .heatmap-cell {
   border-radius: 2px;
   min-height: 12px;
+}
+
+.heatmap-cell--selected {
+  outline: 1px solid #f59e0b;
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.36);
+}
+
+.session-selection-chip {
+  margin: 0 0 0.55rem;
+  padding: 0.42rem 0.55rem;
+  border: 1px solid rgba(245, 158, 11, 0.42);
+  border-radius: 6px;
+  background: rgba(245, 158, 11, 0.1);
+  color: #f8fafc;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.session-selection-chip strong {
+  color: #fbbf24;
 }
 
 .compare-hint {

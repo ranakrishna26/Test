@@ -6,6 +6,8 @@ import {
   Cell,
   Line,
   LineChart,
+  ReferenceDot,
+  ReferenceLine,
   ResponsiveContainer,
   Scatter,
   ScatterChart,
@@ -314,7 +316,7 @@ export function OperatorDashboard() {
   }, [allSessionsForSubscriber, sessionCellFilter])
 
   const trendData = useMemo(
-    () => sessions.map((s, i) => ({ i, tp: s.throughputMbps })),
+    () => sessions.map((s, i) => ({ i, tp: s.throughputMbps, id: s.id })),
     [sessions],
   )
   const scatterData = useMemo(
@@ -322,6 +324,24 @@ export function OperatorDashboard() {
     [sessions],
   )
   const heatmap = useMemo(() => heatmapData(sessions), [sessions])
+  const selectedSession = useMemo(
+    () => sessions.find((s) => s.id === selectedSessionId) ?? null,
+    [sessions, selectedSessionId],
+  )
+  const selectedTrendPoint = useMemo(
+    () => trendData.find((d) => d.id === selectedSessionId) ?? null,
+    [trendData, selectedSessionId],
+  )
+  const selectedScatterPoint = useMemo(
+    () => scatterData.find((d) => d.id === selectedSessionId) ?? null,
+    [scatterData, selectedSessionId],
+  )
+  const selectedHeatmapIndex = useMemo(() => {
+    if (!selectedSessionId || !heatmap.cells.length) return -1
+    const idx = sessions.findIndex((s) => s.id === selectedSessionId)
+    if (idx < 0) return -1
+    return idx % heatmap.cells.length
+  }, [sessions, selectedSessionId, heatmap.cells.length])
 
   useEffect(() => {
     if (selectedSessionId && !sessions.some((s) => s.id === selectedSessionId)) {
@@ -922,6 +942,18 @@ export function OperatorDashboard() {
               <div className="session-analytics-scroll">
                 <div className="charts-block">
                   <h3 className="block-title">Session charts</h3>
+                  {selectedSession ? (
+                    <p className="session-selection-chip" role="status">
+                      Selected session: <strong>{selectedSession.id}</strong> on{' '}
+                      {selectedSession.cellName} ({selectedSession.cellId}) - signal{' '}
+                      {selectedSession.signalQuality.toFixed(2)}, throughput{' '}
+                      {selectedSession.throughputMbps} Mbps
+                    </p>
+                  ) : (
+                    <p className="session-selection-chip" role="status">
+                      Select a session row or map pixel to highlight it across charts.
+                    </p>
+                  )}
                   <div className="chart-grid">
                     <figure className="chart-fig">
                       <figcaption>Trend · throughput by session order</figcaption>
@@ -935,6 +967,23 @@ export function OperatorDashboard() {
                           <XAxis dataKey="i" tick={{ fontSize: 11 }} />
                           <YAxis tick={{ fontSize: 11 }} unit=" Mbps" />
                           <Tooltip />
+                          {selectedTrendPoint && (
+                            <>
+                              <ReferenceLine
+                                x={selectedTrendPoint.i}
+                                stroke="#f59e0b"
+                                strokeDasharray="4 3"
+                              />
+                              <ReferenceDot
+                                x={selectedTrendPoint.i}
+                                y={selectedTrendPoint.tp}
+                                r={5}
+                                fill="#f59e0b"
+                                stroke="#0f172a"
+                                strokeWidth={1.4}
+                              />
+                            </>
+                          )}
                           <Line
                             type="monotone"
                             dataKey="tp"
@@ -969,6 +1018,9 @@ export function OperatorDashboard() {
                           />
                           <Tooltip cursor={{ strokeDasharray: '3 3' }} />
                           <Scatter data={scatterData} fill="#2dd4bf" />
+                          {selectedScatterPoint && (
+                            <Scatter data={[selectedScatterPoint]} fill="#f59e0b" />
+                          )}
                         </ScatterChart>
                       </ResponsiveContainer>
                     </figure>
@@ -983,7 +1035,9 @@ export function OperatorDashboard() {
                         {heatmap.cells.map((cell, idx) => (
                           <div
                             key={idx}
-                            className="heatmap-cell"
+                            className={`heatmap-cell ${
+                              idx === selectedHeatmapIndex ? 'heatmap-cell--selected' : ''
+                            }`}
                             title={cell.label}
                             style={{
                               opacity: 0.32 + (cell.v / 3) * 0.5,

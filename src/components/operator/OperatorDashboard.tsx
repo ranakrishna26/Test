@@ -447,6 +447,10 @@ export function OperatorDashboard() {
     setView('sessions')
   }
 
+  function toggleSessionSelection(sessionId: string) {
+    setSelectedSessionId((prev) => (prev === sessionId ? null : sessionId))
+  }
+
   function toggleCellDetails(cellId: string) {
     setExpandedCellIds((prev) => {
       const next = new Set(prev)
@@ -897,7 +901,7 @@ export function OperatorDashboard() {
                               .filter(Boolean)
                               .join(' ') || undefined
                           }
-                          onClick={() => setSelectedSessionId(s.id)}
+                          onClick={() => toggleSessionSelection(s.id)}
                         >
                           <td className="mono">{s.id}</td>
                           <td className="muted">
@@ -928,7 +932,7 @@ export function OperatorDashboard() {
                 activeTab={activeTab}
                 sessions={sessions}
                 selectedSessionId={selectedSessionId}
-                onSessionSelect={setSelectedSessionId}
+                onSessionSelect={toggleSessionSelection}
                 sessionTableCellFilter={sessionCellFilter}
                 showHoverKpis={view === 'sessions'}
                 embed={view === 'sessions' ? 'compact' : 'full'}

@@ -26,7 +26,7 @@ type Props = {
   subscriberImsi: string | null
   activeTab: TableTab
   sessions: SessionRow[]
-  selectedSessionId?: string | null
+  selectedSessionIds?: string[]
   onSessionSelect?: (sessionId: string) => void
   sessionTableCellFilter?: string | null
   showHoverKpis: boolean
@@ -362,7 +362,7 @@ function makeSessionJourneyPoints(
   sessions: SessionRow[],
   tab: TableTab,
   period: 'A' | 'B',
-  selectedSessionId: string | null,
+  selectedSessionIds: Set<string>,
 ): Feature<Point, PixelProps>[] {
   const features: Feature<Point, PixelProps>[] = []
   const seed = hashString(imsi)
@@ -429,8 +429,8 @@ function makeSessionJourneyPoints(
             kpiValueDisplay: band.display,
             kpiState: band.state,
             kpiStateLabel: band.label,
-            selectedSession: selectedSessionId === s.id ? 1 : 0,
-            hasSelection: selectedSessionId ? 1 : 0,
+            selectedSession: selectedSessionIds.has(s.id) ? 1 : 0,
+            hasSelection: selectedSessionIds.size > 0 ? 1 : 0,
           },
         })
       }
@@ -507,8 +507,8 @@ function makeSessionJourneyPoints(
           kpiValueDisplay: band.display,
           kpiState: band.state,
           kpiStateLabel: band.label,
-          selectedSession: selectedSessionId === s.id ? 1 : 0,
-          hasSelection: selectedSessionId ? 1 : 0,
+          selectedSession: selectedSessionIds.has(s.id) ? 1 : 0,
+          hasSelection: selectedSessionIds.size > 0 ? 1 : 0,
         },
       })
     }
@@ -520,7 +520,7 @@ function makeActivityCloud(
   subscribers: typeof SUBSCRIBERS,
   tab: TableTab,
   period: 'A' | 'B',
-  selectedSessionId: string | null,
+  selectedSessionIds: Set<string>,
 ): Feature<Point, PixelProps>[] {
   const features: Feature<Point, PixelProps>[] = []
   const periodPenalty = period === 'B' ? 8 : 0
@@ -606,7 +606,7 @@ function makeActivityCloud(
         kpiState: band.state,
         kpiStateLabel: band.label,
         selectedSession: 0,
-        hasSelection: selectedSessionId ? 1 : 0,
+        hasSelection: selectedSessionIds.size > 0 ? 1 : 0,
       },
     })
   })
@@ -619,7 +619,7 @@ export function OperatorMap({
   subscriberImsi,
   activeTab,
   sessions,
-  selectedSessionId = null,
+  selectedSessionIds = [],
   onSessionSelect,
   sessionTableCellFilter,
   showHoverKpis: _showHoverKpis,
@@ -630,6 +630,7 @@ export function OperatorMap({
 }: Props) {
   void _showHoverKpis
   const compact = embed === 'compact'
+  const selectedSessionIdSet = useMemo(() => new Set(selectedSessionIds), [selectedSessionIds])
   const filters = subscriberGlobalFilters ?? ALL_SUBSCRIBER_FILTERS
   const mapRef = useRef<mapboxgl.Map | null>(null)
   const mapElRef = useRef<HTMLDivElement>(null)
@@ -640,6 +641,8 @@ export function OperatorMap({
   const [showPeriodB, setShowPeriodB] = useState(true)
   const [legendCollapsed, setLegendCollapsed] = useState(false)
   const [mapError, setMapError] = useState<string | null>(null)
+  const canShowPeriodBOverlay = mode === 'subscriberFocus'
+  const showPeriodBOverlay = canShowPeriodBOverlay && showPeriodB
 
   const { direct, all } = useMemo(
     () =>
@@ -689,10 +692,16 @@ export function OperatorMap({
   const pixelCollection = useMemo<FeatureCollection<Point, PixelProps>>(() => {
     let features: Feature<Point, PixelProps>[] = []
     if (mode === 'subscriberFocus' && subscriberImsi) {
-      features = makeSessionJourneyPoints(subscriberImsi, sessions, activeTab, 'A', selectedSessionId)
-      if (showPeriodB) {
+      features = makeSessionJourneyPoints(
+        subscriberImsi,
+        sessions,
+        activeTab,
+        'A',
+        selectedSessionIdSet,
+      )
+      if (showPeriodBOverlay) {
         features = features.concat(
-          makeSessionJourneyPoints(subscriberImsi, sessions, activeTab, 'B', selectedSessionId),
+          makeSessionJourneyPoints(subscriberImsi, sessions, activeTab, 'B', selectedSessionIdSet),
         )
       }
     } else {
@@ -704,9 +713,9 @@ export function OperatorMap({
         mode === 'cellFocus' && selectedCellId
           ? baseSubs.filter((s) => neighborSet(selectedCellId).has(s.cellId))
           : baseSubs
-      features = makeActivityCloud(scoped, activeTab, 'A', selectedSessionId)
-      if (showPeriodB)
-        features = features.concat(makeActivityCloud(scoped, activeTab, 'B', selectedSessionId))
+      features = makeActivityCloud(scoped, activeTab, 'A', selectedSessionIdSet)
+      if (showPeriodBOverlay)
+        features = features.concat(makeActivityCloud(scoped, activeTab, 'B', selectedSessionIdSet))
     }
     return { type: 'FeatureCollection', features }
   }, [
@@ -714,11 +723,19 @@ export function OperatorMap({
     subscriberImsi,
     selectedCellId,
     sessions,
-    selectedSessionId,
+    selectedSessionIdSet,
     filters,
     activeTab,
-    showPeriodB,
+    showPeriodBOverlay,
   ])
+
+  const selectedPeriodAPoints = useMemo(
+    () =>
+      pixelCollection.features.filter(
+        (f) => f.properties.period === 'A' && selectedSessionIdSet.has(f.properties.sessionId),
+      ),
+    [pixelCollection, selectedSessionIdSet],
+  )
 
   const legendText = useMemo(() => {
     if (mode === 'all') return 'All sectors · click a cell or table row to open subscribers'
@@ -970,9 +987,9 @@ export function OperatorMap({
     mapRef.current.setLayoutProperty(
       PIXEL_B_LAYER,
       'visibility',
-      showPixels && showPeriodB ? 'visible' : 'none',
+      showPixels && showPeriodBOverlay ? 'visible' : 'none',
     )
-  }, [mapReady, showPixels, showPeriodB])
+  }, [mapReady, showPixels, showPeriodBOverlay])
 
   useEffect(() => {
     if (!mapReady || !mapRef.current || !fitIds.size) return
@@ -991,17 +1008,29 @@ export function OperatorMap({
   }, [mapReady, selectedCellId])
 
   useEffect(() => {
-    if (!mapReady || !mapRef.current || !selectedSessionId) return
-    const selectedPoint = pixelCollection.features.find(
-      (f) => f.properties.sessionId === selectedSessionId && f.properties.period === 'A',
+    if (!mapReady || !mapRef.current || selectedSessionIds.length === 0) return
+    if (!selectedPeriodAPoints.length) return
+
+    if (selectedSessionIds.length === 1 || selectedPeriodAPoints.length === 1) {
+      const selectedPoint = selectedPeriodAPoints[0]
+      mapRef.current.flyTo({
+        center: selectedPoint.geometry.coordinates as [number, number],
+        duration: 320,
+        zoom: Math.max(mapRef.current.getZoom(), 14.8),
+      })
+      return
+    }
+
+    const bounds = new mapboxgl.LngLatBounds()
+    selectedPeriodAPoints.forEach((point) =>
+      bounds.extend(point.geometry.coordinates as [number, number]),
     )
-    if (!selectedPoint) return
-    mapRef.current.flyTo({
-      center: selectedPoint.geometry.coordinates as [number, number],
+    mapRef.current.fitBounds(bounds, {
+      padding: compact ? 36 : 64,
       duration: 320,
-      zoom: Math.max(mapRef.current.getZoom(), 14.8),
+      maxZoom: 14.8,
     })
-  }, [mapReady, selectedSessionId, pixelCollection])
+  }, [mapReady, selectedSessionIds, selectedPeriodAPoints, compact])
 
   const kpiLabel =
     activeTab === 'failure'
@@ -1128,14 +1157,16 @@ export function OperatorMap({
                 />
                 Show pixels
               </label>
-              <label className="map-legend-toggle">
-                <input
-                  type="checkbox"
-                  checked={showPeriodB}
-                  onChange={(e) => setShowPeriodB(e.target.checked)}
-                />
-                Show period B overlay
-              </label>
+              {canShowPeriodBOverlay && (
+                <label className="map-legend-toggle">
+                  <input
+                    type="checkbox"
+                    checked={showPeriodB}
+                    onChange={(e) => setShowPeriodB(e.target.checked)}
+                  />
+                  Show period B overlay
+                </label>
+              )}
             </>
           )}
         </div>

@@ -260,7 +260,8 @@ export function OperatorDashboard() {
   const [selectedImsi, setSelectedImsi] = useState<string | null>(null)
   /** STATE 3: filter session table to one cell (map click); cleared on background click or navigation. */
   const [sessionCellFilter, setSessionCellFilter] = useState<string | null>(null)
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
+  const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([])
+  const [sessionSelectionAnchorId, setSessionSelectionAnchorId] = useState<string | null>(null)
   const [expandedCellIds, setExpandedCellIds] = useState<Set<string>>(() => new Set())
   const [tableImsiSearch, setTableImsiSearch] = useState('')
 
@@ -324,30 +325,33 @@ export function OperatorDashboard() {
     [sessions],
   )
   const heatmap = useMemo(() => heatmapData(sessions), [sessions])
-  const selectedSession = useMemo(
-    () => sessions.find((s) => s.id === selectedSessionId) ?? null,
-    [sessions, selectedSessionId],
+  const selectedSessionIdSet = useMemo(() => new Set(selectedSessionIds), [selectedSessionIds])
+  const selectedSessions = useMemo(
+    () => sessions.filter((s) => selectedSessionIdSet.has(s.id)),
+    [sessions, selectedSessionIdSet],
   )
-  const selectedTrendPoint = useMemo(
-    () => trendData.find((d) => d.id === selectedSessionId) ?? null,
-    [trendData, selectedSessionId],
+  const selectedTrendPoints = useMemo(
+    () => trendData.filter((d) => selectedSessionIdSet.has(d.id)),
+    [trendData, selectedSessionIdSet],
   )
-  const selectedScatterPoint = useMemo(
-    () => scatterData.find((d) => d.id === selectedSessionId) ?? null,
-    [scatterData, selectedSessionId],
+  const selectedScatterPoints = useMemo(
+    () => scatterData.filter((d) => selectedSessionIdSet.has(d.id)),
+    [scatterData, selectedSessionIdSet],
   )
-  const selectedHeatmapIndex = useMemo(() => {
-    if (!selectedSessionId || !heatmap.cells.length) return -1
-    const idx = sessions.findIndex((s) => s.id === selectedSessionId)
-    if (idx < 0) return -1
-    return idx % heatmap.cells.length
-  }, [sessions, selectedSessionId, heatmap.cells.length])
+  const selectedHeatmapIndexes = useMemo(() => {
+    if (!selectedSessionIds.length || !heatmap.cells.length) return new Set<number>()
+    const indexes = new Set<number>()
+    sessions.forEach((s, idx) => {
+      if (selectedSessionIdSet.has(s.id)) indexes.add(idx % heatmap.cells.length)
+    })
+    return indexes
+  }, [sessions, selectedSessionIds.length, selectedSessionIdSet, heatmap.cells.length])
 
   useEffect(() => {
-    if (selectedSessionId && !sessions.some((s) => s.id === selectedSessionId)) {
-      setSelectedSessionId(null)
-    }
-  }, [sessions, selectedSessionId])
+    const validIds = new Set(sessions.map((s) => s.id))
+    setSelectedSessionIds((prev) => prev.filter((id) => validIds.has(id)))
+    setSessionSelectionAnchorId((prev) => (prev && validIds.has(prev) ? prev : null))
+  }, [sessions])
 
   const comparisonBarData = useMemo(() => {
     if (!sessions.length) return []
@@ -392,7 +396,8 @@ export function OperatorDashboard() {
   function handleMapCellSelect(cellId: string) {
     if (view === 'sessions' && selectedImsi) {
       setSessionCellFilter(cellId)
-      setSelectedSessionId(null)
+      setSelectedSessionIds([])
+      setSessionSelectionAnchorId(null)
       return
     }
     setSessionCellFilter(null)
@@ -404,7 +409,8 @@ export function OperatorDashboard() {
   function handleMapBackgroundClick() {
     if (view === 'sessions' && selectedImsi) {
       setSessionCellFilter(null)
-      setSelectedSessionId(null)
+      setSelectedSessionIds([])
+      setSessionSelectionAnchorId(null)
     }
   }
 
@@ -412,7 +418,8 @@ export function OperatorDashboard() {
     setSelectedCellId(cellId)
     setSelectedImsi(null)
     setSessionCellFilter(null)
-    setSelectedSessionId(null)
+    setSelectedSessionIds([])
+    setSessionSelectionAnchorId(null)
     setView('subscribers')
   }
 
@@ -421,7 +428,8 @@ export function OperatorDashboard() {
     setSelectedCellId(null)
     setSelectedImsi(null)
     setSessionCellFilter(null)
-    setSelectedSessionId(null)
+    setSelectedSessionIds([])
+    setSessionSelectionAnchorId(null)
     setTableImsiSearch('')
   }
 
@@ -429,13 +437,15 @@ export function OperatorDashboard() {
     setView('subscribers')
     setSelectedImsi(null)
     setSessionCellFilter(null)
-    setSelectedSessionId(null)
+    setSelectedSessionIds([])
+    setSessionSelectionAnchorId(null)
   }
 
   function openSubscriber(imsi: string) {
     setSelectedImsi(imsi)
     setSessionCellFilter(null)
-    setSelectedSessionId(null)
+    setSelectedSessionIds([])
+    setSessionSelectionAnchorId(null)
     setView('sessions')
   }
 
@@ -443,12 +453,45 @@ export function OperatorDashboard() {
     setSelectedCellId(null)
     setSelectedImsi(imsi)
     setSessionCellFilter(null)
-    setSelectedSessionId(null)
+    setSelectedSessionIds([])
+    setSessionSelectionAnchorId(null)
     setView('sessions')
   }
 
-  function toggleSessionSelection(sessionId: string) {
-    setSelectedSessionId((prev) => (prev === sessionId ? null : sessionId))
+  function selectSingleSession(sessionId: string) {
+    setSelectedSessionIds([sessionId])
+    setSessionSelectionAnchorId(sessionId)
+  }
+
+  function selectSessionFromTable(sessionId: string, rowIndex: number, shiftKey: boolean) {
+    if (!shiftKey) {
+      setSelectedSessionIds([sessionId])
+      setSessionSelectionAnchorId(sessionId)
+      return
+    }
+    const clickedIsSelected = selectedSessionIdSet.has(sessionId)
+    const anchorIndex = sessionSelectionAnchorId
+      ? sessions.findIndex((s) => s.id === sessionSelectionAnchorId)
+      : -1
+    if (anchorIndex < 0 || rowIndex < 0) {
+      setSelectedSessionIds((prev) => {
+        if (clickedIsSelected) return prev.filter((id) => id !== sessionId)
+        return [...prev, sessionId]
+      })
+      setSessionSelectionAnchorId(sessionId)
+      return
+    }
+    const [start, end] = anchorIndex < rowIndex ? [anchorIndex, rowIndex] : [rowIndex, anchorIndex]
+    const rangeIds = sessions.slice(start, end + 1).map((s) => s.id)
+    setSelectedSessionIds((prev) => {
+      const next = new Set(prev)
+      if (clickedIsSelected) {
+        rangeIds.forEach((id) => next.delete(id))
+      } else {
+        rangeIds.forEach((id) => next.add(id))
+      }
+      return Array.from(next)
+    })
   }
 
   function toggleCellDetails(cellId: string) {
@@ -888,7 +931,7 @@ export function OperatorDashboard() {
                       </tr>
                     </thead>
                     <tbody>
-                      {sessions.map((s) => (
+                      {sessions.map((s, i) => (
                         <tr
                           key={s.id}
                           className={
@@ -896,12 +939,12 @@ export function OperatorDashboard() {
                               sessionCellFilter && s.cellId === sessionCellFilter
                                 ? 'session-row--cell-focus'
                                 : '',
-                              selectedSessionId === s.id ? 'session-row--selected' : '',
+                              selectedSessionIdSet.has(s.id) ? 'session-row--selected' : '',
                             ]
                               .filter(Boolean)
                               .join(' ') || undefined
                           }
-                          onClick={() => toggleSessionSelection(s.id)}
+                          onClick={(e) => selectSessionFromTable(s.id, i, e.shiftKey)}
                         >
                           <td className="mono">{s.id}</td>
                           <td className="muted">
@@ -931,8 +974,8 @@ export function OperatorDashboard() {
                 subscriberImsi={selectedImsi}
                 activeTab={activeTab}
                 sessions={sessions}
-                selectedSessionId={selectedSessionId}
-                onSessionSelect={toggleSessionSelection}
+                selectedSessionIds={selectedSessionIds}
+                onSessionSelect={selectSingleSession}
                 sessionTableCellFilter={sessionCellFilter}
                 showHoverKpis={view === 'sessions'}
                 embed={view === 'sessions' ? 'compact' : 'full'}
@@ -946,12 +989,28 @@ export function OperatorDashboard() {
               <div className="session-analytics-scroll">
                 <div className="charts-block">
                   <h3 className="block-title">Session charts</h3>
-                  {selectedSession ? (
+                  {selectedSessions.length === 1 ? (
                     <p className="session-selection-chip" role="status">
-                      Selected session: <strong>{selectedSession.id}</strong> on{' '}
-                      {selectedSession.cellName} ({selectedSession.cellId}) - signal{' '}
-                      {selectedSession.signalQuality.toFixed(2)}, throughput{' '}
-                      {selectedSession.throughputMbps} Mbps
+                      Selected session: <strong>{selectedSessions[0].id}</strong> on{' '}
+                      {selectedSessions[0].cellName} ({selectedSessions[0].cellId}) - signal{' '}
+                      {selectedSessions[0].signalQuality.toFixed(2)}, throughput{' '}
+                      {selectedSessions[0].throughputMbps} Mbps
+                    </p>
+                  ) : selectedSessions.length > 1 ? (
+                    <p className="session-selection-chip" role="status">
+                      Selected sessions: <strong>{selectedSessions.length}</strong> across{' '}
+                      <strong>{new Set(selectedSessions.map((s) => s.cellId)).size}</strong> cells -
+                      avg signal{' '}
+                      {(
+                        selectedSessions.reduce((sum, s) => sum + s.signalQuality, 0) /
+                        selectedSessions.length
+                      ).toFixed(2)}
+                      , avg throughput{' '}
+                      {(
+                        selectedSessions.reduce((sum, s) => sum + s.throughputMbps, 0) /
+                        selectedSessions.length
+                      ).toFixed(1)}{' '}
+                      Mbps
                     </p>
                   ) : (
                     <p className="session-selection-chip" role="status">
@@ -971,23 +1030,19 @@ export function OperatorDashboard() {
                           <XAxis dataKey="i" tick={{ fontSize: 11 }} />
                           <YAxis tick={{ fontSize: 11 }} unit=" Mbps" />
                           <Tooltip />
-                          {selectedTrendPoint && (
-                            <>
-                              <ReferenceLine
-                                x={selectedTrendPoint.i}
-                                stroke="#f59e0b"
-                                strokeDasharray="4 3"
-                              />
+                          {selectedTrendPoints.map((point) => (
+                            <Fragment key={point.id}>
+                              <ReferenceLine x={point.i} stroke="#f59e0b" strokeDasharray="4 3" />
                               <ReferenceDot
-                                x={selectedTrendPoint.i}
-                                y={selectedTrendPoint.tp}
+                                x={point.i}
+                                y={point.tp}
                                 r={5}
                                 fill="#f59e0b"
                                 stroke="#0f172a"
                                 strokeWidth={1.4}
                               />
-                            </>
-                          )}
+                            </Fragment>
+                          ))}
                           <Line
                             type="monotone"
                             dataKey="tp"
@@ -1022,8 +1077,8 @@ export function OperatorDashboard() {
                           />
                           <Tooltip cursor={{ strokeDasharray: '3 3' }} />
                           <Scatter data={scatterData} fill="#2dd4bf" />
-                          {selectedScatterPoint && (
-                            <Scatter data={[selectedScatterPoint]} fill="#f59e0b" />
+                          {selectedScatterPoints.length > 0 && (
+                            <Scatter data={selectedScatterPoints} fill="#f59e0b" />
                           )}
                         </ScatterChart>
                       </ResponsiveContainer>
@@ -1040,7 +1095,7 @@ export function OperatorDashboard() {
                           <div
                             key={idx}
                             className={`heatmap-cell ${
-                              idx === selectedHeatmapIndex ? 'heatmap-cell--selected' : ''
+                              selectedHeatmapIndexes.has(idx) ? 'heatmap-cell--selected' : ''
                             }`}
                             title={cell.label}
                             style={{

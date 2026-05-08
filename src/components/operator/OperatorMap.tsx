@@ -826,15 +826,6 @@ export function OperatorMap({
           'line-opacity': ['coalesce', ['get', 'opacity'], 0.2],
         },
       })
-      const colorExpr: mapboxgl.Expression = [
-        'match',
-        ['coalesce', ['get', 'kpiState'], 'breached'],
-        'meetsTarget',
-        '#22c55e',
-        'nearBreach',
-        '#f59e0b',
-        '#ef4444',
-      ]
       map.addLayer({
         id: PIXEL_A_LAYER,
         type: 'circle',
@@ -853,7 +844,9 @@ export function OperatorMap({
             'case',
             ['all', ['==', ['get', 'hasSelection'], 1], ['!=', ['get', 'selectedSession'], 1]],
             '#94a3b8',
-            colorExpr,
+            ['==', ['get', 'selectedSession'], 1],
+            '#1d4ed8',
+            '#3b82f6',
           ],
           'circle-opacity': [
             'case',
@@ -883,7 +876,9 @@ export function OperatorMap({
             'case',
             ['all', ['==', ['get', 'hasSelection'], 1], ['!=', ['get', 'selectedSession'], 1]],
             '#94a3b8',
-            colorExpr,
+            ['==', ['get', 'selectedSession'], 1],
+            '#1d4ed8',
+            '#60a5fa',
           ],
           'circle-opacity': [
             'case',
@@ -1053,15 +1048,6 @@ export function OperatorMap({
         : activeTab === 'payload'
           ? 'Payload throughput'
           : 'Handover success'
-  const kpiLegendBand =
-    activeTab === 'failure'
-      ? { good: '0 events/sub', warning: '1 events/sub', bad: '>=2 events/sub' }
-      : activeTab === 'callDrop'
-        ? { good: '0 drops/sub', warning: '1 drops/sub', bad: '>=2 drops/sub' }
-        : activeTab === 'payload'
-          ? { good: '>=20 Mbps', warning: '10-20 Mbps', bad: '<10 Mbps' }
-          : { good: '>=96%', warning: '92-96%', bad: '<92%' }
-
   return (
     <div className={`map-shell ${compact ? 'map-shell--embed' : ''}`}>
       <div className={`map-toolbar ${compact ? 'map-toolbar--embed' : ''}`}>
@@ -1144,19 +1130,14 @@ export function OperatorMap({
           {!legendCollapsed && (
             <>
               <div className="map-legend-row">
-                <span className="map-legend-swatch map-legend-swatch--good" />
-                <span className="map-legend-label">Good</span>
-                <span className="map-legend-value">{kpiLegendBand.good}</span>
+                <span className="map-legend-swatch map-legend-swatch--pixel-a" />
+                <span className="map-legend-label">Period A pixels</span>
+                <span className="map-legend-value">Blue</span>
               </div>
               <div className="map-legend-row">
-                <span className="map-legend-swatch map-legend-swatch--mid" />
-                <span className="map-legend-label">Warning</span>
-                <span className="map-legend-value">{kpiLegendBand.warning}</span>
-              </div>
-              <div className="map-legend-row">
-                <span className="map-legend-swatch map-legend-swatch--bad" />
-                <span className="map-legend-label">Bad</span>
-                <span className="map-legend-value">{kpiLegendBand.bad}</span>
+                <span className="map-legend-swatch map-legend-swatch--pixel-b" />
+                <span className="map-legend-label">Period B overlay</span>
+                <span className="map-legend-value">Blue (faded)</span>
               </div>
               <div className="map-legend-kpi">KPI: {kpiLabel}</div>
               <label className="map-legend-toggle">

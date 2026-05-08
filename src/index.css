@@ -546,6 +546,14 @@ html {
   background: #ef4444;
 }
 
+.map-legend-swatch--pixel-a {
+  background: #3b82f6;
+}
+
+.map-legend-swatch--pixel-b {
+  background: #60a5fa;
+}
+
 .map-legend-kpi {
   margin-top: 0.35rem;
   font-size: 0.68rem;

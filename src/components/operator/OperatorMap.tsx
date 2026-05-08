@@ -117,6 +117,15 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v))
 }
 
+function isFiniteLngLat(value: unknown): value is [number, number] {
+  return (
+    Array.isArray(value) &&
+    value.length >= 2 &&
+    Number.isFinite(value[0]) &&
+    Number.isFinite(value[1])
+  )
+}
+
 function hashString(s: string): number {
   let h = 2166136261
   for (let i = 0; i < s.length; i++) {
@@ -1011,25 +1020,48 @@ export function OperatorMap({
     if (!mapReady || !mapRef.current || selectedSessionIds.length === 0) return
     if (!selectedPeriodAPoints.length) return
 
+    const map = mapRef.current
+
     if (selectedSessionIds.length === 1 || selectedPeriodAPoints.length === 1) {
       const selectedPoint = selectedPeriodAPoints[0]
-      mapRef.current.flyTo({
-        center: selectedPoint.geometry.coordinates as [number, number],
-        duration: 320,
-        zoom: Math.max(mapRef.current.getZoom(), 14.8),
-      })
+      const center = selectedPoint.geometry.coordinates
+      if (!isFiniteLngLat(center)) {
+        setMapError('Unable to focus selected session due to invalid coordinates')
+        return
+      }
+      try {
+        map.flyTo({
+          center,
+          duration: 320,
+          zoom: Math.max(map.getZoom(), 14.8),
+        })
+      } catch {
+        setMapError('Unable to focus selected session')
+      }
       return
     }
 
     const bounds = new mapboxgl.LngLatBounds()
-    selectedPeriodAPoints.forEach((point) =>
-      bounds.extend(point.geometry.coordinates as [number, number]),
-    )
-    mapRef.current.fitBounds(bounds, {
-      padding: compact ? 36 : 64,
-      duration: 320,
-      maxZoom: 14.8,
-    })
+    let hasValidCoordinate = false
+    for (const point of selectedPeriodAPoints) {
+      const coordinates = point.geometry.coordinates
+      if (!isFiniteLngLat(coordinates)) continue
+      bounds.extend(coordinates)
+      hasValidCoordinate = true
+    }
+    if (!hasValidCoordinate) {
+      setMapError('Unable to focus selected sessions due to invalid coordinates')
+      return
+    }
+    try {
+      map.fitBounds(bounds, {
+        padding: compact ? 36 : 64,
+        duration: 320,
+        maxZoom: 14.8,
+      })
+    } catch {
+      setMapError('Unable to focus selected sessions')
+    }
   }, [mapReady, selectedSessionIds, selectedPeriodAPoints, compact])
 
   const kpiLabel =

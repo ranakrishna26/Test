@@ -8,10 +8,6 @@ import {
   VIP_HIGHWAY_IMSI,
   applyGlobalSubscriberFilters,
   cellById,
-  cellTableCallDropMetrics,
-  cellTableFailureMetrics,
-  cellTableHoPctMetrics,
-  cellTablePayloadDlMetrics,
   mapCellSummaryLines,
   neighborSet,
   subscribersForFootprint,
@@ -48,6 +44,15 @@ const CELL_FILL_LAYER = 'cell-wedges-fill'
 const CELL_LINE_LAYER = 'cell-wedges-line'
 const PIXEL_A_LAYER = 'subscriber-pixels-a'
 const PIXEL_B_LAYER = 'subscriber-pixels-b'
+const PIXEL_KPI_COLOR_EXPR: mapboxgl.Expression = [
+  'match',
+  ['get', 'kpiState'],
+  'meetsTarget',
+  '#22c55e',
+  'nearBreach',
+  '#f59e0b',
+  '#ef4444',
+]
 
 const MAP_BOUNDS = {
   west: -0.255,
@@ -92,7 +97,6 @@ type CellFeatureProps = {
   cellId: string
   opacity: number
   selected: number
-  kpiState: PixelProps['kpiState']
   tooltipHtml: string
 }
 
@@ -351,33 +355,6 @@ function operatorBandForKpi(
   if (value < 92) return { state: 'breached', label: 'Bad', value, display: `${value.toFixed(1)}%` }
   if (value < 96) return { state: 'nearBreach', label: 'Warning', value, display: `${value.toFixed(1)}%` }
   return { state: 'meetsTarget', label: 'Good', value, display: `${value.toFixed(1)}%` }
-}
-
-function cellBandForKpi(c: Cell, tab: TableTab, filters: SubscriberGlobalFilters): PixelProps['kpiState'] {
-  if (tab === 'failure') {
-    const m = cellTableFailureMetrics(c, filters)
-    const perSubscriber = m.total > 0 ? m.value / m.total : 0
-    if (perSubscriber >= 2) return 'breached'
-    if (perSubscriber >= 1) return 'nearBreach'
-    return 'meetsTarget'
-  }
-  if (tab === 'callDrop') {
-    const m = cellTableCallDropMetrics(c, filters)
-    const perSubscriber = m.total > 0 ? m.value / m.total : 0
-    if (perSubscriber >= 2) return 'breached'
-    if (perSubscriber >= 1) return 'nearBreach'
-    return 'meetsTarget'
-  }
-  if (tab === 'payload') {
-    const m = cellTablePayloadDlMetrics(c, filters)
-    if (m.value < 10) return 'breached'
-    if (m.value < 20) return 'nearBreach'
-    return 'meetsTarget'
-  }
-  const m = cellTableHoPctMetrics(c, filters)
-  if (m.value < 92) return 'breached'
-  if (m.value < 96) return 'nearBreach'
-  return 'meetsTarget'
 }
 
 function makeSessionJourneyPoints(
@@ -702,13 +679,12 @@ export function OperatorMap({
           cellId: c.id,
           opacity,
           selected: selectedCellId === c.id ? 1 : 0,
-          kpiState: cellBandForKpi(c, activeTab, filters),
           tooltipHtml: mapCellSummaryLines(c, filters).join('<br/>'),
         },
       }
     })
     return { type: 'FeatureCollection', features }
-  }, [mode, selectedCellId, subscriberImsi, direct, all, filters, activeTab])
+  }, [mode, selectedCellId, subscriberImsi, direct, all, filters])
 
   const pixelCollection = useMemo<FeatureCollection<Point, PixelProps>>(() => {
     let features: Feature<Point, PixelProps>[] = []
@@ -798,21 +774,12 @@ export function OperatorMap({
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
       })
-      const cellColorExpr: mapboxgl.Expression = [
-        'match',
-        ['coalesce', ['get', 'kpiState'], 'breached'],
-        'meetsTarget',
-        '#22c55e',
-        'nearBreach',
-        '#f59e0b',
-        '#ef4444',
-      ]
       map.addLayer({
         id: CELL_FILL_LAYER,
         type: 'fill',
         source: CELL_SOURCE,
         paint: {
-          'fill-color': cellColorExpr,
+          'fill-color': '#1d4ed8',
           'fill-opacity': ['coalesce', ['get', 'opacity'], 0.2],
         },
       })
@@ -844,9 +811,7 @@ export function OperatorMap({
             'case',
             ['all', ['==', ['get', 'hasSelection'], 1], ['!=', ['get', 'selectedSession'], 1]],
             '#94a3b8',
-            ['==', ['get', 'selectedSession'], 1],
-            '#1d4ed8',
-            '#3b82f6',
+            PIXEL_KPI_COLOR_EXPR,
           ],
           'circle-opacity': [
             'case',
@@ -876,9 +841,7 @@ export function OperatorMap({
             'case',
             ['all', ['==', ['get', 'hasSelection'], 1], ['!=', ['get', 'selectedSession'], 1]],
             '#94a3b8',
-            ['==', ['get', 'selectedSession'], 1],
-            '#1d4ed8',
-            '#60a5fa',
+            PIXEL_KPI_COLOR_EXPR,
           ],
           'circle-opacity': [
             'case',
@@ -1130,14 +1093,31 @@ export function OperatorMap({
           {!legendCollapsed && (
             <>
               <div className="map-legend-row">
-                <span className="map-legend-swatch map-legend-swatch--pixel-a" />
-                <span className="map-legend-label">Period A pixels</span>
-                <span className="map-legend-value">Blue</span>
+                <span
+                  className="map-legend-swatch"
+                  style={{ backgroundColor: '#22c55e' }}
+                  aria-hidden
+                />
+                <span className="map-legend-label">Good</span>
+                <span className="map-legend-value">Meets target</span>
               </div>
               <div className="map-legend-row">
-                <span className="map-legend-swatch map-legend-swatch--pixel-b" />
-                <span className="map-legend-label">Period B overlay</span>
-                <span className="map-legend-value">Blue (faded)</span>
+                <span
+                  className="map-legend-swatch"
+                  style={{ backgroundColor: '#f59e0b' }}
+                  aria-hidden
+                />
+                <span className="map-legend-label">Warning</span>
+                <span className="map-legend-value">Near breach</span>
+              </div>
+              <div className="map-legend-row">
+                <span
+                  className="map-legend-swatch"
+                  style={{ backgroundColor: '#ef4444' }}
+                  aria-hidden
+                />
+                <span className="map-legend-label">Bad</span>
+                <span className="map-legend-value">Breached</span>
               </div>
               <div className="map-legend-kpi">KPI: {kpiLabel}</div>
               <label className="map-legend-toggle">

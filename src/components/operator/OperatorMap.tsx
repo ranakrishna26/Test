@@ -991,13 +991,21 @@ export function OperatorMap({
 
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
+    const map = mapRef.current
+    if (!map.isStyleLoaded()) return
+    if (!map.getLayer(PIXEL_A_LAYER) || !map.getLayer(PIXEL_B_LAYER)) return
     const visibility = showPixels ? 'visible' : 'none'
-    mapRef.current.setLayoutProperty(PIXEL_A_LAYER, 'visibility', visibility)
-    mapRef.current.setLayoutProperty(
-      PIXEL_B_LAYER,
-      'visibility',
-      showPixels && showPeriodBOverlay ? 'visible' : 'none',
-    )
+    try {
+      map.setLayoutProperty(PIXEL_A_LAYER, 'visibility', visibility)
+      map.setLayoutProperty(
+        PIXEL_B_LAYER,
+        'visibility',
+        showPixels && showPeriodBOverlay ? 'visible' : 'none',
+      )
+    } catch {
+      // Avoid hard-crashing React render path when style/layers are still resolving.
+      setMapError('Map layers are still loading, please retry in a moment.')
+    }
   }, [mapReady, showPixels, showPeriodBOverlay])
 
   useEffect(() => {

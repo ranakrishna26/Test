@@ -8,6 +8,10 @@ import {
   VIP_HIGHWAY_IMSI,
   applyGlobalSubscriberFilters,
   cellById,
+  cellTableCallDropMetrics,
+  cellTableFailureMetrics,
+  cellTableHoPctMetrics,
+  cellTablePayloadDlMetrics,
   mapCellSummaryLines,
   neighborSet,
   subscribersForFootprint,
@@ -88,6 +92,7 @@ type CellFeatureProps = {
   cellId: string
   opacity: number
   selected: number
+  kpiState: PixelProps['kpiState']
   tooltipHtml: string
 }
 
@@ -96,7 +101,10 @@ type PixelProps = {
   sessionId: string
   cellId: string
   period: 'A' | 'B'
-  kpiQuality: number
+  kpiValue: number
+  kpiValueDisplay: string
+  kpiState: 'meetsTarget' | 'nearBreach' | 'breached'
+  kpiStateLabel: string
   selectedSession: number
   hasSelection: number
 }
@@ -309,16 +317,67 @@ function wedgePolygon(
   return [[leftInner, leftOuter, tip, rightOuter, rightInner, leftInner]]
 }
 
-function kpiQualityFromSession(s: SessionRow, tab: TableTab, tunnelPenalty: number, jitter: number): number {
-  const failQ = clamp(100 - s.setupAccessFailures * 17 - tunnelPenalty - jitter, 0, 100)
-  const dropQ = clamp(100 - s.callDrops * 30 - tunnelPenalty * 0.9 - jitter, 0, 100)
-  const payloadQ = clamp(s.throughputMbps * 1.9 - tunnelPenalty * 0.85 + 8 - jitter * 0.35, 0, 100)
-  const hoBase = s.handoverAttempted ? (s.handoverSuccess ? 94 : 62) : 88
-  const hoQ = clamp(hoBase - tunnelPenalty * 0.55 - jitter * 0.2, 0, 100)
-  if (tab === 'failure') return failQ
-  if (tab === 'callDrop') return dropQ
-  if (tab === 'payload') return payloadQ
-  return hoQ
+function operatorBandForKpi(
+  s: SessionRow,
+  tab: TableTab,
+  tunnelPenalty: number,
+  jitter: number,
+): {
+  state: PixelProps['kpiState']
+  label: string
+  value: number
+  display: string
+} {
+  if (tab === 'failure') {
+    const value = clamp(s.setupAccessFailures + (tunnelPenalty + jitter) / 48, 0, 5)
+    if (value >= 2) return { state: 'breached', label: 'Bad', value, display: `${value.toFixed(1)} events/session` }
+    if (value >= 1) return { state: 'nearBreach', label: 'Warning', value, display: `${value.toFixed(1)} events/session` }
+    return { state: 'meetsTarget', label: 'Good', value, display: `${value.toFixed(1)} events/session` }
+  }
+  if (tab === 'callDrop') {
+    const value = clamp(s.callDrops + (tunnelPenalty + jitter) / 62, 0, 4)
+    if (value >= 2) return { state: 'breached', label: 'Bad', value, display: `${value.toFixed(1)} drops/session` }
+    if (value >= 1) return { state: 'nearBreach', label: 'Warning', value, display: `${value.toFixed(1)} drops/session` }
+    return { state: 'meetsTarget', label: 'Good', value, display: `${value.toFixed(1)} drops/session` }
+  }
+  if (tab === 'payload') {
+    const value = clamp(s.throughputMbps - (tunnelPenalty + jitter) * 0.36, 0, 150)
+    if (value < 10) return { state: 'breached', label: 'Bad', value, display: `${value.toFixed(1)} Mbps` }
+    if (value < 20) return { state: 'nearBreach', label: 'Warning', value, display: `${value.toFixed(1)} Mbps` }
+    return { state: 'meetsTarget', label: 'Good', value, display: `${value.toFixed(1)} Mbps` }
+  }
+  const base = s.handoverAttempted ? (s.handoverSuccess ? 98 : 88) : 95
+  const value = clamp(base - (tunnelPenalty + jitter) * 0.26, 70, 100)
+  if (value < 92) return { state: 'breached', label: 'Bad', value, display: `${value.toFixed(1)}%` }
+  if (value < 96) return { state: 'nearBreach', label: 'Warning', value, display: `${value.toFixed(1)}%` }
+  return { state: 'meetsTarget', label: 'Good', value, display: `${value.toFixed(1)}%` }
+}
+
+function cellBandForKpi(c: Cell, tab: TableTab, filters: SubscriberGlobalFilters): PixelProps['kpiState'] {
+  if (tab === 'failure') {
+    const m = cellTableFailureMetrics(c, filters)
+    const perSubscriber = m.total > 0 ? m.value / m.total : 0
+    if (perSubscriber >= 2) return 'breached'
+    if (perSubscriber >= 1) return 'nearBreach'
+    return 'meetsTarget'
+  }
+  if (tab === 'callDrop') {
+    const m = cellTableCallDropMetrics(c, filters)
+    const perSubscriber = m.total > 0 ? m.value / m.total : 0
+    if (perSubscriber >= 2) return 'breached'
+    if (perSubscriber >= 1) return 'nearBreach'
+    return 'meetsTarget'
+  }
+  if (tab === 'payload') {
+    const m = cellTablePayloadDlMetrics(c, filters)
+    if (m.value < 10) return 'breached'
+    if (m.value < 20) return 'nearBreach'
+    return 'meetsTarget'
+  }
+  const m = cellTableHoPctMetrics(c, filters)
+  if (m.value < 92) return 'breached'
+  if (m.value < 96) return 'nearBreach'
+  return 'meetsTarget'
 }
 
 function makeSessionJourneyPoints(
@@ -380,11 +439,7 @@ function makeSessionJourneyPoints(
         const nearestHandover = handoverCenters.reduce((best, x) => Math.min(best, Math.abs(progress - x)), 1)
         const handoverPenalty = nearestHandover < 0.07 ? (1 - nearestHandover / 0.07) * 26 : 0
         const jitter = rand01(seed + (sessionIdx * 97 + j * 17) * 17) * 7
-        const quality = clamp(
-          kpiQualityFromSession(s, tab, tunnel + periodPenalty + handoverPenalty, jitter),
-          0,
-          100,
-        )
+        const band = operatorBandForKpi(s, tab, tunnel + periodPenalty + handoverPenalty, jitter)
         features.push({
           type: 'Feature',
           geometry: { type: 'Point', coordinates: [safeLng, safeLat] },
@@ -393,7 +448,10 @@ function makeSessionJourneyPoints(
             sessionId: s.id,
             cellId: s.cellId,
             period,
-            kpiQuality: quality,
+            kpiValue: band.value,
+            kpiValueDisplay: band.display,
+            kpiState: band.state,
+            kpiStateLabel: band.label,
             selectedSession: selectedSessionId === s.id ? 1 : 0,
             hasSelection: selectedSessionId ? 1 : 0,
           },
@@ -459,11 +517,7 @@ function makeSessionJourneyPoints(
             ? 18
             : 0
       const jitter = rand01(seed + ord * 17) * 7
-      const quality = clamp(
-        kpiQualityFromSession(s, tab, tunnel + periodPenalty + handoverStress, jitter),
-        0,
-        100,
-      )
+      const band = operatorBandForKpi(s, tab, tunnel + periodPenalty + handoverStress, jitter)
       features.push({
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [safeLng, safeLat] },
@@ -472,7 +526,10 @@ function makeSessionJourneyPoints(
           sessionId: s.id,
           cellId: s.cellId,
           period,
-          kpiQuality: quality,
+          kpiValue: band.value,
+          kpiValueDisplay: band.display,
+          kpiState: band.state,
+          kpiStateLabel: band.label,
           selectedSession: selectedSessionId === s.id ? 1 : 0,
           hasSelection: selectedSessionId ? 1 : 0,
         },
@@ -555,7 +612,7 @@ function makeActivityCloud(
       handoverAttempted: true,
       handoverSuccess: s.hoSuccessPct > 90,
     }
-    const quality = kpiQualityFromSession(pseudoSession, tab, periodPenalty, rand01(seed + 5) * 8)
+    const band = operatorBandForKpi(pseudoSession, tab, periodPenalty, rand01(seed + 5) * 8)
     features.push({
       type: 'Feature',
       geometry: {
@@ -567,7 +624,10 @@ function makeActivityCloud(
         sessionId: `ACT-${s.imsi.slice(-7)}-${i}`,
         cellId: s.cellId,
         period,
-        kpiQuality: quality,
+        kpiValue: band.value,
+        kpiValueDisplay: band.display,
+        kpiState: band.state,
+        kpiStateLabel: band.label,
         selectedSession: 0,
         hasSelection: selectedSessionId ? 1 : 0,
       },
@@ -628,12 +688,12 @@ export function OperatorMap({
       if (mode === 'cellFocus' && selectedCellId) {
         const n = neighborSet(selectedCellId)
         if (c.id === selectedCellId) opacity = 1
-        else if (n.has(c.id)) opacity = 0.5
-        else opacity = 0.15
+        else if (n.has(c.id)) opacity = 0.34
+        else opacity = 0.08
       } else if (mode === 'subscriberFocus' && subscriberImsi) {
-        if (direct.has(c.id)) opacity = 0.95
-        else if (all.has(c.id)) opacity = 0.45
-        else opacity = 0.14
+        if (direct.has(c.id)) opacity = 0.98
+        else if (all.has(c.id)) opacity = 0.32
+        else opacity = 0.08
       }
       return {
         type: 'Feature',
@@ -642,12 +702,13 @@ export function OperatorMap({
           cellId: c.id,
           opacity,
           selected: selectedCellId === c.id ? 1 : 0,
+          kpiState: cellBandForKpi(c, activeTab, filters),
           tooltipHtml: mapCellSummaryLines(c, filters).join('<br/>'),
         },
       }
     })
     return { type: 'FeatureCollection', features }
-  }, [mode, selectedCellId, subscriberImsi, direct, all, filters])
+  }, [mode, selectedCellId, subscriberImsi, direct, all, filters, activeTab])
 
   const pixelCollection = useMemo<FeatureCollection<Point, PixelProps>>(() => {
     let features: Feature<Point, PixelProps>[] = []
@@ -737,12 +798,21 @@ export function OperatorMap({
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
       })
+      const cellColorExpr: mapboxgl.Expression = [
+        'match',
+        ['coalesce', ['get', 'kpiState'], 'breached'],
+        'meetsTarget',
+        '#22c55e',
+        'nearBreach',
+        '#f59e0b',
+        '#ef4444',
+      ]
       map.addLayer({
         id: CELL_FILL_LAYER,
         type: 'fill',
         source: CELL_SOURCE,
         paint: {
-          'fill-color': '#1d4ed8',
+          'fill-color': cellColorExpr,
           'fill-opacity': ['coalesce', ['get', 'opacity'], 0.2],
         },
       })
@@ -752,18 +822,18 @@ export function OperatorMap({
         source: CELL_SOURCE,
         paint: {
           'line-color': ['case', ['==', ['get', 'selected'], 1], '#0f172a', '#ffffff'],
-          'line-width': ['case', ['==', ['get', 'selected'], 1], 2.2, 1],
+          'line-width': ['case', ['==', ['get', 'selected'], 1], 3.4, 0.9],
           'line-opacity': ['coalesce', ['get', 'opacity'], 0.2],
         },
       })
       const colorExpr: mapboxgl.Expression = [
-        'step',
-        ['coalesce', ['get', 'kpiQuality'], 0],
-        '#ef4444',
-        40,
-        '#f59e0b',
-        70,
+        'match',
+        ['coalesce', ['get', 'kpiState'], 'breached'],
+        'meetsTarget',
         '#22c55e',
+        'nearBreach',
+        '#f59e0b',
+        '#ef4444',
       ]
       map.addLayer({
         id: PIXEL_A_LAYER,
@@ -846,10 +916,10 @@ export function OperatorMap({
         const cellId = String(f.properties?.cellId ?? '')
         const period = String(f.properties?.period ?? 'A')
         const imsi = String(f.properties?.imsi ?? '')
-        const kpiQuality = Number(f.properties?.kpiQuality ?? 0)
+        const kpiStateLabel = String(f.properties?.kpiStateLabel ?? 'Unknown')
+        const kpiValueDisplay = String(f.properties?.kpiValueDisplay ?? 'n/a')
         if (sessionId) onSessionSelect?.(sessionId)
         const cellName = cellById(cellId)?.name ?? 'Unknown cell'
-        const qualityLabel = kpiQuality >= 70 ? 'Good' : kpiQuality >= 40 ? 'Mid' : 'Bad'
         pixelPopupRef.current
           .setLngLat(e.lngLat)
           .setHTML(
@@ -858,7 +928,7 @@ export function OperatorMap({
               `<li>Session ${sessionId || 'n/a'}</li>`,
               `<li>${cellName} (${cellId || 'n/a'})</li>`,
               `<li>IMSI: ${imsi || 'n/a'}</li>`,
-              `<li>Period ${period} · KPI ${qualityLabel} (${kpiQuality.toFixed(1)})</li>`,
+              `<li>Period ${period} · ${kpiStateLabel} (${kpiValueDisplay})</li>`,
               '</ul>',
             ].join(''),
           )
@@ -983,6 +1053,14 @@ export function OperatorMap({
         : activeTab === 'payload'
           ? 'Payload throughput'
           : 'Handover success'
+  const kpiLegendBand =
+    activeTab === 'failure'
+      ? { good: '0 events/sub', warning: '1 events/sub', bad: '>=2 events/sub' }
+      : activeTab === 'callDrop'
+        ? { good: '0 drops/sub', warning: '1 drops/sub', bad: '>=2 drops/sub' }
+        : activeTab === 'payload'
+          ? { good: '>=20 Mbps', warning: '10-20 Mbps', bad: '<10 Mbps' }
+          : { good: '>=96%', warning: '92-96%', bad: '<92%' }
 
   return (
     <div className={`map-shell ${compact ? 'map-shell--embed' : ''}`}>
@@ -1067,15 +1145,18 @@ export function OperatorMap({
             <>
               <div className="map-legend-row">
                 <span className="map-legend-swatch map-legend-swatch--good" />
-                <span>Good</span>
+                <span className="map-legend-label">Good</span>
+                <span className="map-legend-value">{kpiLegendBand.good}</span>
               </div>
               <div className="map-legend-row">
                 <span className="map-legend-swatch map-legend-swatch--mid" />
-                <span>Mid</span>
+                <span className="map-legend-label">Warning</span>
+                <span className="map-legend-value">{kpiLegendBand.warning}</span>
               </div>
               <div className="map-legend-row">
                 <span className="map-legend-swatch map-legend-swatch--bad" />
-                <span>Bad</span>
+                <span className="map-legend-label">Bad</span>
+                <span className="map-legend-value">{kpiLegendBand.bad}</span>
               </div>
               <div className="map-legend-kpi">KPI: {kpiLabel}</div>
               <label className="map-legend-toggle">

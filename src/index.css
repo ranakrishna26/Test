@@ -512,8 +512,19 @@ html {
   display: flex;
   align-items: center;
   gap: 0.35rem;
+  justify-content: space-between;
   font-size: 0.7rem;
   line-height: 1.2;
+}
+
+.map-legend-label {
+  margin-right: auto;
+  font-weight: 600;
+}
+
+.map-legend-value {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .map-legend-swatch {

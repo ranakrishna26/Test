@@ -1,12 +1,14 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import {
+  Area,
   Bar,
   BarChart,
   CartesianGrid,
   Cell,
+  ComposedChart,
   Line,
-  LineChart,
   ReferenceDot,
+  ReferenceArea,
   ReferenceLine,
   ResponsiveContainer,
   Scatter,
@@ -37,6 +39,7 @@ import {
   tabHeadlineLabel,
   type ComparePeriodOption,
   type Cell as NetworkCell,
+  type Subscriber as NetworkSubscriber,
   type SubscriberGlobalFilters,
   type TableTab,
 } from '../../data/placeholderNetwork'
@@ -108,13 +111,13 @@ function CellFootprintRatio({
 function cellTableFootprintHint(tab: TableTab): string {
   switch (tab) {
     case 'failure':
-      return 'Same filtered footprint as the subscriber list (this cell and neighbours; global filters on the bar). With issue / cohort counts subscribers with any setup/access failure; denominator is cohort size. IMSI search only filters the subscriber table.'
+      return 'Same filtered footprint as the subscriber list (this cell and neighbours; global filters on the bar). With issue / cohort counts subscribers with any setup/access failure; denominator is cohort size. Subscriber search only filters the subscriber table.'
     case 'callDrop':
-      return 'Same filtered footprint as the subscriber list (this cell and neighbours; global filters on the bar). With issue / cohort counts subscribers with any call drop; denominator is cohort size. IMSI search only filters the subscriber table.'
+      return 'Same filtered footprint as the subscriber list (this cell and neighbours; global filters on the bar). With issue / cohort counts subscribers with any call drop; denominator is cohort size. Subscriber search only filters the subscriber table.'
     case 'payload':
-      return 'Columns match the subscriber drill-down footprint (this cell and neighbours; global filters). DL and UL columns compare each subscriber to a fraction of the cell RAN throughput. IMSI search only filters the subscriber table.'
+      return 'Columns match the subscriber drill-down footprint (this cell and neighbours; global filters). DL and UL columns compare each subscriber to a fraction of the cell RAN throughput. Subscriber search only filters the subscriber table.'
     case 'handover':
-      return 'Columns match the subscriber drill-down footprint (this cell and neighbours; global filters). With issue / in cohort reflects subscribers under the HO success threshold for that cell. IMSI search only filters the subscriber table.'
+      return 'Columns match the subscriber drill-down footprint (this cell and neighbours; global filters). With issue / in cohort reflects subscribers under the HO success threshold for that cell. Subscriber search only filters the subscriber table.'
     default:
       return ''
   }
@@ -170,6 +173,53 @@ function CellDetailsPanel({ cell }: { cell: NetworkCell }) {
       </span>
       <span>
         <strong>Neighbors</strong>: {cell.neighborIds.length}
+      </span>
+    </div>
+  )
+}
+
+function SubscriberDetailsPanel({ subscriber }: { subscriber: NetworkSubscriber }) {
+  const anchor = cellById(subscriber.cellId)
+  return (
+    <div className="subscriber-details-grid" role="group" aria-label="Additional subscriber details">
+      <span>
+        <strong>Subscriber type</strong>: {subscriber.segment}
+      </span>
+      <span>
+        <strong>Device</strong>: {subscriber.device}
+      </span>
+      <span>
+        <strong>Technology</strong>: {subscriber.technology.toUpperCase()} {subscriber.mode.toUpperCase()}
+      </span>
+      <span>
+        <strong>Service</strong>: {subscriber.service}
+      </span>
+      <span>
+        <strong>Time horizon</strong>: {subscriber.timeHorizon}
+      </span>
+      <span>
+        <strong>Anchor cell</strong>: {subscriber.cellName} ({subscriber.cellId})
+      </span>
+      <span>
+        <strong>Neighbor cells</strong>: {anchor?.neighborIds.length ?? 0}
+      </span>
+      <span>
+        <strong>Sessions</strong>: {subscriber.sessions}
+      </span>
+      <span>
+        <strong>Setup/access failures</strong>: {subscriber.setupAccessFailures}
+      </span>
+      <span>
+        <strong>Call drops</strong>: {subscriber.callDrops}
+      </span>
+      <span>
+        <strong>DL throughput</strong>: {subscriber.dlMbps} Mbps
+      </span>
+      <span>
+        <strong>UL throughput</strong>: {subscriber.ulMbps} Mbps
+      </span>
+      <span>
+        <strong>HO success</strong>: {subscriber.hoSuccessPct.toFixed(1)}%
       </span>
     </div>
   )
@@ -242,8 +292,12 @@ function TableNavBreadcrumb({
 
 export function OperatorDashboard() {
   const [timeRange, setTimeRange] = useState('24h')
+  const [customTimeRangeStart, setCustomTimeRangeStart] = useState('')
+  const [customTimeRangeEnd, setCustomTimeRangeEnd] = useState('')
+  const [technology, setTechnology] = useState('all')
+  const [service, setService] = useState('all')
+  const [networkMode, setNetworkMode] = useState<'all' | 'sa' | 'nsa'>('all')
   const [subscriberType, setSubscriberType] = useState('all')
-  const [deviceType, setDeviceType] = useState('all')
   const [cellAttributes, setCellAttributes] = useState('')
 
   const [filterPresets, setFilterPresets] = useState<SavedFilterPreset[]>(() =>
@@ -263,6 +317,7 @@ export function OperatorDashboard() {
   const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([])
   const [sessionSelectionAnchorId, setSessionSelectionAnchorId] = useState<string | null>(null)
   const [expandedCellIds, setExpandedCellIds] = useState<Set<string>>(() => new Set())
+  const [expandedSubscriberIds, setExpandedSubscriberIds] = useState<Set<string>>(() => new Set())
   const [tableImsiSearch, setTableImsiSearch] = useState('')
 
   const [comparePeriodB, setComparePeriodB] = useState<ComparePeriodOption>('7d')
@@ -272,10 +327,22 @@ export function OperatorDashboard() {
   const subscriberGlobalFilters: SubscriberGlobalFilters = useMemo(
     () => ({
       timeRange,
+      customTimeRangeStart,
+      customTimeRangeEnd,
+      technology,
+      service,
+      networkMode,
       subscriberType,
-      deviceType,
     }),
-    [timeRange, subscriberType, deviceType],
+    [
+      timeRange,
+      customTimeRangeStart,
+      customTimeRangeEnd,
+      technology,
+      service,
+      networkMode,
+      subscriberType,
+    ],
   )
 
   const ranked = useMemo(
@@ -316,9 +383,78 @@ export function OperatorDashboard() {
     return allSessionsForSubscriber.filter((s) => s.cellId === sessionCellFilter)
   }, [allSessionsForSubscriber, sessionCellFilter])
 
+  const peerTrendByIndex = useMemo(() => {
+    const bucketCount = sessions.length
+    if (!selectedImsi || bucketCount === 0) {
+      return new Map<number, { avg: number; min: number; max: number; count: number }>()
+    }
+    const peerRows = applyGlobalSubscriberFilters(
+      SUBSCRIBERS.filter((subscriber) => subscriber.imsi !== selectedImsi),
+      subscriberGlobalFilters,
+    )
+    const stats = Array.from({ length: bucketCount }, () => ({
+      sum: 0,
+      min: Number.POSITIVE_INFINITY,
+      max: Number.NEGATIVE_INFINITY,
+      count: 0,
+    }))
+    for (const peer of peerRows) {
+      const peerSessions = getSessions(peer.imsi).filter((session) =>
+        sessionCellFilter ? session.cellId === sessionCellFilter : true,
+      )
+      if (!peerSessions.length) continue
+      const denominator = Math.max(peerSessions.length - 1, 1)
+      peerSessions.forEach((session, index) => {
+        const bucketIndex =
+          bucketCount === 1 ? 0 : Math.round((index / denominator) * (bucketCount - 1))
+        const bucket = stats[bucketIndex]
+        bucket.sum += session.throughputMbps
+        bucket.min = Math.min(bucket.min, session.throughputMbps)
+        bucket.max = Math.max(bucket.max, session.throughputMbps)
+        bucket.count += 1
+      })
+    }
+    const rawAverages = stats.map((bucket) => (bucket.count > 0 ? bucket.sum / bucket.count : null))
+    const result = new Map<number, { avg: number; min: number; max: number; count: number }>()
+    stats.forEach((value, index) => {
+      if (value.count === 0) return
+      // Smooth peer trend so it reads as a contextual backdrop, not a per-point trace.
+      let smoothedTotal = 0
+      let smoothedCount = 0
+      for (let offset = -1; offset <= 1; offset += 1) {
+        const neighbor = rawAverages[index + offset]
+        if (neighbor === null || neighbor === undefined) continue
+        smoothedTotal += neighbor
+        smoothedCount += 1
+      }
+      result.set(index, {
+        avg: smoothedCount > 0 ? smoothedTotal / smoothedCount : value.sum / value.count,
+        min: value.min,
+        max: value.max,
+        count: value.count,
+      })
+    })
+    return result
+  }, [selectedImsi, sessionCellFilter, sessions.length, subscriberGlobalFilters])
+
   const trendData = useMemo(
-    () => sessions.map((s, i) => ({ i, tp: s.throughputMbps, id: s.id })),
-    [sessions],
+    () =>
+      sessions.map((s, i) => {
+        const peer = peerTrendByIndex.get(i)
+        return {
+          i,
+          tp: s.throughputMbps,
+          id: s.id,
+          cellId: s.cellId,
+          cellName: s.cellName,
+          peerBackdrop: peer?.avg ?? null,
+          peerAvg: peer?.avg ?? null,
+          peerLow: peer?.min ?? null,
+          peerHigh: peer?.max ?? null,
+          peerCount: peer?.count ?? 0,
+        }
+      }),
+    [sessions, peerTrendByIndex],
   )
   const scatterData = useMemo(
     () => sessions.map((s) => ({ x: s.signalQuality, y: s.throughputMbps, id: s.id })),
@@ -333,6 +469,22 @@ export function OperatorDashboard() {
   const selectedTrendPoints = useMemo(
     () => trendData.filter((d) => selectedSessionIdSet.has(d.id)),
     [trendData, selectedSessionIdSet],
+  )
+  const trendSessionBands = useMemo(
+    () => {
+      const palette = [
+        'rgba(59, 130, 246, 0.18)',
+        'rgba(16, 185, 129, 0.18)',
+        'rgba(168, 85, 247, 0.18)',
+        'rgba(245, 158, 11, 0.18)',
+      ]
+      return trendData.map((point, index) => ({
+        x1: point.i - 0.5,
+        x2: point.i + 0.5,
+        fill: palette[index % palette.length],
+      }))
+    },
+    [trendData],
   )
   const selectedScatterPoints = useMemo(
     () => scatterData.filter((d) => selectedSessionIdSet.has(d.id)),
@@ -368,7 +520,10 @@ export function OperatorDashboard() {
       {
         key: 'A',
         name: 'Period A',
-        periodLabel: globalTimeRangeLabel(timeRange),
+        periodLabel:
+          timeRange === 'custom' && customTimeRangeStart && customTimeRangeEnd
+            ? `${customTimeRangeStart} → ${customTimeRangeEnd}`
+            : globalTimeRangeLabel(timeRange),
         value: valueA,
         meta,
       },
@@ -388,6 +543,8 @@ export function OperatorDashboard() {
     sessions,
     activeTab,
     timeRange,
+    customTimeRangeStart,
+    customTimeRangeEnd,
     comparePeriodB,
     customRangeStart,
     customRangeEnd,
@@ -465,6 +622,7 @@ export function OperatorDashboard() {
 
   function selectSessionFromTable(sessionId: string, rowIndex: number, shiftKey: boolean) {
     if (!shiftKey) {
+      // Plain click follows standard single-select behavior.
       setSelectedSessionIds([sessionId])
       setSessionSelectionAnchorId(sessionId)
       return
@@ -492,6 +650,7 @@ export function OperatorDashboard() {
       }
       return Array.from(next)
     })
+    setSessionSelectionAnchorId(sessionId)
   }
 
   function toggleCellDetails(cellId: string) {
@@ -499,6 +658,15 @@ export function OperatorDashboard() {
       const next = new Set(prev)
       if (next.has(cellId)) next.delete(cellId)
       else next.add(cellId)
+      return next
+    })
+  }
+
+  function toggleSubscriberDetails(imsi: string) {
+    setExpandedSubscriberIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(imsi)) next.delete(imsi)
+      else next.add(imsi)
       return next
     })
   }
@@ -513,19 +681,28 @@ export function OperatorDashboard() {
   function snapshotGlobalFilters(): GlobalFilterSnapshot {
     return {
       timeRange,
+      customTimeRangeStart,
+      customTimeRangeEnd,
+      technology,
+      service,
+      networkMode,
       subscriberType,
-      deviceType,
       cellAttributes,
     }
   }
 
-  function handleApplyPreset(id: string) {
+  function handleApplyPreset(id: string | null) {
+    if (!id) return
     const preset = filterPresets.find((p) => p.id === id)
     if (!preset) return
     const { filters } = preset
     setTimeRange(filters.timeRange)
+    setCustomTimeRangeStart(filters.customTimeRangeStart)
+    setCustomTimeRangeEnd(filters.customTimeRangeEnd)
+    setTechnology(filters.technology)
+    setService(filters.service)
+    setNetworkMode(filters.networkMode)
     setSubscriberType(filters.subscriberType)
-    setDeviceType(filters.deviceType)
     setCellAttributes(filters.cellAttributes)
   }
 
@@ -541,7 +718,16 @@ export function OperatorDashboard() {
     setFilterPresets((prev) => [...prev, next])
   }
 
-  function handleDeletePreset(id: string) {
+  function handleDeletePreset(id: string | null) {
+    if (!id) return
+    const preset = filterPresets.find((p) => p.id === id)
+    if (
+      preset &&
+      typeof window !== 'undefined' &&
+      !window.confirm(`Remove preset "${preset.name}"?`)
+    ) {
+      return
+    }
     setFilterPresets((prev) => prev.filter((p) => p.id !== id))
   }
 
@@ -550,10 +736,18 @@ export function OperatorDashboard() {
       <GlobalFiltersBar
         timeRange={timeRange}
         onTimeRange={setTimeRange}
+        customTimeRangeStart={customTimeRangeStart}
+        onCustomTimeRangeStart={setCustomTimeRangeStart}
+        customTimeRangeEnd={customTimeRangeEnd}
+        onCustomTimeRangeEnd={setCustomTimeRangeEnd}
+        technology={technology}
+        onTechnology={setTechnology}
+        service={service}
+        onService={setService}
         subscriberType={subscriberType}
         onSubscriberType={setSubscriberType}
-        deviceType={deviceType}
-        onDeviceType={setDeviceType}
+        networkMode={networkMode}
+        onNetworkMode={setNetworkMode}
         presets={filterPresets}
         onApplyPreset={handleApplyPreset}
         onSavePreset={handleSavePreset}
@@ -564,10 +758,10 @@ export function OperatorDashboard() {
         <section className="pane table-pane">
           <div className="table-stack">
             <label className="imsi-search">
-              <span>IMSI search</span>
+              <span>Subscriber search</span>
               <input
                 type="search"
-                placeholder="Filter or find IMSI…"
+                placeholder="Filter or find subscriber…"
                 value={tableImsiSearch}
                 onChange={(e) => setTableImsiSearch(e.target.value)}
               />
@@ -885,21 +1079,48 @@ export function OperatorDashboard() {
                   <table className="minimal-table">
                     <thead>
                       <tr>
-                        <th>IMSI</th>
+                        <th className="row-expand-col" aria-label="Expand row details" />
+                        <th>Subscriber</th>
                         <th>Cell</th>
                         <th>Sessions</th>
                         <th>{tabHeadlineLabel(activeTab)}</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {subscriberRows.map((s) => (
-                        <tr key={s.imsi} onClick={() => openSubscriber(s.imsi)}>
-                          <td className="mono">{s.imsi}</td>
-                          <td>{s.cellName}</td>
-                          <td>{s.sessions}</td>
-                          <td>{headlineMetric(s, activeTab)}</td>
-                        </tr>
-                      ))}
+                      {subscriberRows.map((s) => {
+                        const isExpanded = expandedSubscriberIds.has(s.imsi)
+                        return (
+                          <Fragment key={s.imsi}>
+                            <tr onClick={() => openSubscriber(s.imsi)}>
+                              <td className="row-expand-col">
+                                <button
+                                  type="button"
+                                  className="row-expand-btn"
+                                  aria-label={`${isExpanded ? 'Collapse' : 'Expand'} details for ${s.imsi}`}
+                                  aria-expanded={isExpanded}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    toggleSubscriberDetails(s.imsi)
+                                  }}
+                                >
+                                  {isExpanded ? '▾' : '▸'}
+                                </button>
+                              </td>
+                              <td className="mono">{s.imsi}</td>
+                              <td>{s.cellName}</td>
+                              <td>{s.sessions}</td>
+                              <td>{headlineMetric(s, activeTab)}</td>
+                            </tr>
+                            {isExpanded && (
+                              <tr className="subscriber-details-row">
+                                <td colSpan={5}>
+                                  <SubscriberDetailsPanel subscriber={s} />
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -1025,13 +1246,86 @@ export function OperatorDashboard() {
                         height={220}
                         initialDimension={{ width: 360, height: 220 }}
                       >
-                        <LineChart data={trendData}>
+                        <ComposedChart data={trendData}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                          <XAxis dataKey="i" tick={{ fontSize: 11 }} />
-                          <YAxis tick={{ fontSize: 11 }} unit=" Mbps" />
-                          <Tooltip />
+                          {trendSessionBands.map((band) => (
+                            <ReferenceArea
+                              key={`${band.x1}-${band.x2}`}
+                              x1={band.x1}
+                              x2={band.x2}
+                              fill={band.fill}
+                              strokeOpacity={0}
+                            />
+                          ))}
+                          <XAxis
+                            type="number"
+                            dataKey="i"
+                            tick={{ fontSize: 11, fill: '#cbd5e1' }}
+                            axisLine={{ stroke: '#475569' }}
+                            tickFormatter={(value) => `${Number(value) + 1}`}
+                            domain={[-0.5, Math.max(trendData.length - 0.5, 0.5)]}
+                            allowDecimals={false}
+                          />
+                          <YAxis
+                            tick={{ fontSize: 11, fill: '#cbd5e1' }}
+                            axisLine={{ stroke: '#475569' }}
+                            unit=" Mbps"
+                            domain={[0, 'auto']}
+                          />
+                          <Tooltip
+                            cursor={{ stroke: '#475569', strokeDasharray: '4 3' }}
+                            content={({ active, payload }) => {
+                              if (!active || !payload?.[0]) return null
+                              const d = payload[0].payload as (typeof trendData)[number]
+                              return (
+                                <div className="chart-tooltip">
+                                  <div className="chart-tooltip-title">Session {d.i + 1}</div>
+                                  <div className="chart-tooltip-sub">
+                                    {d.id} · {d.cellName} ({d.cellId})
+                                  </div>
+                                  <div className="chart-tooltip-kpi">
+                                    Selected subscriber: <strong>{d.tp.toFixed(1)} Mbps</strong>
+                                  </div>
+                                  {d.peerAvg !== null && d.peerLow !== null && d.peerHigh !== null ? (
+                                    <div className="chart-tooltip-kpi">
+                                      Peers ({d.peerCount}): {d.peerAvg.toFixed(1)} avg ·{' '}
+                                      {d.peerLow.toFixed(1)}-{d.peerHigh.toFixed(1)} Mbps
+                                    </div>
+                                  ) : (
+                                    <div className="chart-tooltip-kpi">Peers: no data</div>
+                                  )}
+                                </div>
+                              )
+                            }}
+                          />
+                          <Area
+                            type="monotone"
+                            dataKey="peerBackdrop"
+                            stroke="none"
+                            fill="#93c5fd"
+                            fillOpacity={0.22}
+                            isAnimationActive={false}
+                            connectNulls
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey="peerAvg"
+                            stroke="#93c5fd"
+                            strokeWidth={1.5}
+                            dot={false}
+                            strokeDasharray="4 4"
+                            strokeOpacity={0.75}
+                            isAnimationActive={false}
+                            connectNulls
+                          />
                           {selectedTrendPoints.map((point) => (
                             <Fragment key={point.id}>
+                              <ReferenceArea
+                                x1={point.i - 0.5}
+                                x2={point.i + 0.5}
+                                fill="rgba(245, 158, 11, 0.12)"
+                                strokeOpacity={0}
+                              />
                               <ReferenceLine x={point.i} stroke="#f59e0b" strokeDasharray="4 3" />
                               <ReferenceDot
                                 x={point.i}
@@ -1048,9 +1342,10 @@ export function OperatorDashboard() {
                             dataKey="tp"
                             stroke="#60a5fa"
                             dot={false}
-                            strokeWidth={2}
+                            strokeWidth={2.4}
+                            isAnimationActive={false}
                           />
-                        </LineChart>
+                        </ComposedChart>
                       </ResponsiveContainer>
                     </figure>
                     <figure className="chart-fig">

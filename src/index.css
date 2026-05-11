@@ -65,15 +65,15 @@ html {
 
 .filters-row {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 0.75rem;
-  min-width: min-content;
+  min-width: 0;
 }
 
 .filters-primary {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 0.75rem 1rem;
   flex: 1;
@@ -82,9 +82,9 @@ html {
 
 .filters-presets {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: flex-end;
-  gap: 0.5rem 0.65rem;
+  gap: 0.45rem 0.55rem;
   flex-shrink: 0;
   margin-left: auto;
   padding-left: 0.75rem;
@@ -113,8 +113,8 @@ html {
 
 .filter-item-compact select,
 .filter-item-compact .preset-save-inline input {
-  min-width: 5.5rem;
-  max-width: 8rem;
+  min-width: 7rem;
+  max-width: 11rem;
 }
 
 .filter-cell-attrs {
@@ -147,27 +147,6 @@ html {
   min-width: 0;
 }
 
-.preset-save-btn {
-  flex-shrink: 0;
-  padding: 0.35rem 0.85rem;
-  border-radius: 4px;
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: #fff;
-  font: inherit;
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.preset-save-btn:hover {
-  filter: brightness(1.06);
-}
-
-.preset-save-btn:active {
-  filter: brightness(0.96);
-}
-
 .filter-item input,
 .filter-item select {
   font: inherit;
@@ -180,6 +159,117 @@ html {
   border-radius: 4px;
   background: #0b1220;
   min-width: 0;
+}
+
+.mode-toggle-group {
+  display: flex;
+  align-items: center;
+  min-width: 9.5rem;
+}
+
+.mode-toggle-buttons {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.mode-toggle-btn {
+  border: 1px solid var(--border);
+  background: #0b1220;
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 0.32rem 0.68rem;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.mode-toggle-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.mode-toggle-btn.is-selected {
+  background: rgba(96, 165, 250, 0.18);
+  border-color: rgba(96, 165, 250, 0.75);
+  color: #dbeafe;
+}
+
+.custom-time-group {
+  min-width: 16rem;
+}
+
+.custom-time-inputs {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.55rem;
+}
+
+.custom-time-inputs label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 0.65rem;
+}
+
+.custom-time-inputs label span {
+  font-size: 0.65rem;
+}
+
+.custom-time-inputs input[type='date'] {
+  min-width: 8.4rem;
+}
+
+.preset-picker {
+  min-width: 8rem;
+}
+
+.preset-controls-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.preset-icon-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.preset-icon-btn {
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #0b1220;
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: inherit;
+  font-size: 0.98rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.preset-icon-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.preset-icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.preset-icon-btn-danger:hover:not(:disabled) {
+  border-color: #ef4444;
+  color: #fca5a5;
 }
 
 .workspace {
@@ -908,6 +998,12 @@ html {
   padding-bottom: 0.55rem;
 }
 
+.subscriber-details-row td {
+  background: #0b1220;
+  padding-top: 0.55rem;
+  padding-bottom: 0.55rem;
+}
+
 .cell-details-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(220px, 1fr));
@@ -916,7 +1012,20 @@ html {
   color: var(--muted);
 }
 
+.subscriber-details-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 0.38rem 1rem;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
 .cell-details-grid strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.subscriber-details-grid strong {
   color: var(--text);
   font-weight: 600;
 }
@@ -1304,6 +1413,29 @@ html {
 }
 
 @media (max-width: 900px) {
+  .filters-presets {
+    margin-left: 0;
+    border-left: none;
+    padding-left: 0;
+    width: 100%;
+  }
+
+  .preset-controls-row {
+    width: 100%;
+  }
+
+  .preset-picker {
+    flex: 1;
+  }
+
+  .custom-time-group {
+    min-width: 100%;
+  }
+
+  .custom-time-inputs {
+    flex-wrap: wrap;
+  }
+
   .workspace {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);

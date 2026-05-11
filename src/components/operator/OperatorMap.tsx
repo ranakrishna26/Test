@@ -911,7 +911,7 @@ export function OperatorMap({
               '<ul class="map-hover-list">',
               `<li>Session ${sessionId || 'n/a'}</li>`,
               `<li>${cellName} (${cellId || 'n/a'})</li>`,
-              `<li>IMSI: ${imsi || 'n/a'}</li>`,
+              `<li>Subscriber: ${imsi || 'n/a'}</li>`,
               `<li>Period ${period} · ${kpiStateLabel} (${kpiValueDisplay})</li>`,
               '</ul>',
             ].join(''),

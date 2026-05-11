@@ -2,21 +2,35 @@ const STORAGE_KEY = 'operator-dashboard-global-filter-presets'
 
 export type GlobalFilterSnapshot = {
   timeRange: string
+  customTimeRangeStart: string
+  customTimeRangeEnd: string
+  technology: string
+  service: string
+  networkMode: 'all' | 'sa' | 'nsa'
   subscriberType: string
-  deviceType: string
   cellAttributes: string
 }
 
 /** Subset of global filters applied to subscriber cohorts (cell table, drill-down, map). */
 export type SubscriberGlobalFilters = Pick<
   GlobalFilterSnapshot,
-  'timeRange' | 'subscriberType' | 'deviceType'
+  | 'timeRange'
+  | 'customTimeRangeStart'
+  | 'customTimeRangeEnd'
+  | 'technology'
+  | 'service'
+  | 'networkMode'
+  | 'subscriberType'
 >
 
 export const ALL_SUBSCRIBER_FILTERS: SubscriberGlobalFilters = {
   timeRange: '24h',
+  customTimeRangeStart: '',
+  customTimeRangeEnd: '',
+  technology: 'all',
+  service: 'all',
+  networkMode: 'all',
   subscriberType: 'all',
-  deviceType: 'all',
 }
 
 export type SavedFilterPreset = {
@@ -34,8 +48,12 @@ function isSnapshot(x: unknown): x is GlobalFilterSnapshot {
   if (!isRecord(x)) return false
   return (
     typeof x.timeRange === 'string' &&
+    typeof x.customTimeRangeStart === 'string' &&
+    typeof x.customTimeRangeEnd === 'string' &&
+    typeof x.technology === 'string' &&
+    typeof x.service === 'string' &&
+    (x.networkMode === 'all' || x.networkMode === 'sa' || x.networkMode === 'nsa') &&
     typeof x.subscriberType === 'string' &&
-    typeof x.deviceType === 'string' &&
     typeof x.cellAttributes === 'string'
   )
 }
@@ -50,6 +68,28 @@ function isPreset(x: unknown): x is SavedFilterPreset {
   )
 }
 
+function normalizeSnapshot(x: unknown): GlobalFilterSnapshot | null {
+  if (!isRecord(x)) return null
+  const networkMode =
+    x.networkMode === 'sa' || x.networkMode === 'nsa' || x.networkMode === 'all'
+      ? x.networkMode
+      : 'all'
+  const timeRange = typeof x.timeRange === 'string' ? x.timeRange : null
+  const subscriberType = typeof x.subscriberType === 'string' ? x.subscriberType : null
+  const cellAttributes = typeof x.cellAttributes === 'string' ? x.cellAttributes : null
+  if (!timeRange || !subscriberType || cellAttributes === null) return null
+  return {
+    timeRange,
+    customTimeRangeStart: typeof x.customTimeRangeStart === 'string' ? x.customTimeRangeStart : '',
+    customTimeRangeEnd: typeof x.customTimeRangeEnd === 'string' ? x.customTimeRangeEnd : '',
+    technology: typeof x.technology === 'string' ? x.technology : 'all',
+    service: typeof x.service === 'string' ? x.service : 'all',
+    networkMode,
+    subscriberType,
+    cellAttributes,
+  }
+}
+
 export function loadFilterPresets(): SavedFilterPreset[] {
   if (typeof localStorage === 'undefined') return []
   try {
@@ -57,7 +97,29 @@ export function loadFilterPresets(): SavedFilterPreset[] {
     if (!raw) return []
     const parsed: unknown = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
-    return parsed.filter(isPreset)
+    const normalized: SavedFilterPreset[] = []
+    for (const item of parsed) {
+      if (!isRecord(item)) continue
+      if (isPreset(item)) {
+        normalized.push(item)
+        continue
+      }
+      const filters = normalizeSnapshot(item.filters)
+      if (
+        typeof item.id === 'string' &&
+        typeof item.name === 'string' &&
+        typeof item.savedAt === 'string' &&
+        filters
+      ) {
+        normalized.push({
+          id: item.id,
+          name: item.name,
+          savedAt: item.savedAt,
+          filters,
+        })
+      }
+    }
+    return normalized
   } catch {
     return []
   }

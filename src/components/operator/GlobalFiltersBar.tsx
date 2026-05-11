@@ -4,30 +4,45 @@ import type { SavedFilterPreset } from '../../utils/filterPresets'
 type Props = {
   timeRange: string
   onTimeRange: (v: string) => void
+  customTimeRangeStart: string
+  onCustomTimeRangeStart: (v: string) => void
+  customTimeRangeEnd: string
+  onCustomTimeRangeEnd: (v: string) => void
+  technology: string
+  onTechnology: (v: string) => void
+  service: string
+  onService: (v: string) => void
   subscriberType: string
   onSubscriberType: (v: string) => void
-  deviceType: string
-  onDeviceType: (v: string) => void
+  networkMode: 'all' | 'sa' | 'nsa'
+  onNetworkMode: (v: 'all' | 'sa' | 'nsa') => void
   presets: SavedFilterPreset[]
-  onApplyPreset: (id: string) => void
+  onApplyPreset: (id: string | null) => void
   onSavePreset: (name: string) => void
-  onDeletePreset: (id: string) => void
+  onDeletePreset: (id: string | null) => void
 }
 
 export function GlobalFiltersBar({
   timeRange,
   onTimeRange,
+  customTimeRangeStart,
+  onCustomTimeRangeStart,
+  customTimeRangeEnd,
+  onCustomTimeRangeEnd,
+  technology,
+  onTechnology,
+  service,
+  onService,
   subscriberType,
   onSubscriberType,
-  deviceType,
-  onDeviceType,
+  networkMode,
+  onNetworkMode,
   presets,
   onApplyPreset,
   onSavePreset,
   onDeletePreset,
 }: Props) {
-  const [loadSelection, setLoadSelection] = useState('')
-  const [deleteSelection, setDeleteSelection] = useState('')
+  const [presetSelection, setPresetSelection] = useState('')
   const [saveName, setSaveName] = useState('')
 
   return (
@@ -42,6 +57,74 @@ export function GlobalFiltersBar({
               <option value="24h">Last 24 hours</option>
               <option value="7d">Last 7 days</option>
               <option value="30d">Last 30 days</option>
+              <option value="custom">Custom range</option>
+            </select>
+          </label>
+          <div className="mode-toggle-group" role="group" aria-label="5G mode">
+            <div className="mode-toggle-buttons">
+              <button
+                type="button"
+                className={`mode-toggle-btn ${
+                  networkMode === 'all' || networkMode === 'sa' ? 'is-selected' : ''
+                }`}
+                onClick={() => onNetworkMode(networkMode === 'sa' ? 'all' : 'sa')}
+                aria-pressed={networkMode === 'sa'}
+                title="Filter for 5G SA subscribers"
+              >
+                5G SA
+              </button>
+              <button
+                type="button"
+                className={`mode-toggle-btn ${
+                  networkMode === 'all' || networkMode === 'nsa' ? 'is-selected' : ''
+                }`}
+                onClick={() => onNetworkMode(networkMode === 'nsa' ? 'all' : 'nsa')}
+                aria-pressed={networkMode === 'nsa'}
+                title="Filter for 5G NSA subscribers"
+              >
+                5G NSA
+              </button>
+            </div>
+          </div>
+          {timeRange === 'custom' && (
+            <div className="filter-item custom-time-group">
+              <span>Custom dates</span>
+              <div className="custom-time-inputs">
+                <label>
+                  <span>Start</span>
+                  <input
+                    type="date"
+                    value={customTimeRangeStart}
+                    onChange={(e) => onCustomTimeRangeStart(e.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>End</span>
+                  <input
+                    type="date"
+                    value={customTimeRangeEnd}
+                    onChange={(e) => onCustomTimeRangeEnd(e.target.value)}
+                  />
+                </label>
+              </div>
+            </div>
+          )}
+          <label className="filter-item">
+            <span>Technology</span>
+            <select value={technology} onChange={(e) => onTechnology(e.target.value)}>
+              <option value="all">All</option>
+              <option value="5g">5G</option>
+              <option value="4g">4G</option>
+            </select>
+          </label>
+          <label className="filter-item">
+            <span>Service</span>
+            <select value={service} onChange={(e) => onService(e.target.value)}>
+              <option value="all">All</option>
+              <option value="data">Data</option>
+              <option value="voice">Voice</option>
+              <option value="messaging">Messaging</option>
+              <option value="iot">IoT</option>
             </select>
           </label>
           <label className="filter-item">
@@ -54,29 +137,16 @@ export function GlobalFiltersBar({
               <option value="vip">VIP</option>
             </select>
           </label>
-          <label className="filter-item">
-            <span>Device type</span>
-            <select value={deviceType} onChange={(e) => onDeviceType(e.target.value)}>
-              <option value="all">All</option>
-              <option value="phone">Handset</option>
-              <option value="cpe">CPE</option>
-              <option value="module">Module</option>
-            </select>
-          </label>
         </div>
 
         <div className="filters-presets" aria-label="Filter presets">
-          <label className="filter-item filter-item-compact">
-            <span title="Load a saved filter preset">Load</span>
+          <div className="preset-controls-row">
+            <label className="filter-item filter-item-compact preset-picker">
             <select
-              aria-label="Load a saved filter preset"
-              title="Load saved preset"
-              value={loadSelection}
-              onChange={(e) => {
-                const id = e.target.value
-                if (id) onApplyPreset(id)
-                setLoadSelection('')
-              }}
+              aria-label="Select a saved filter preset"
+              title="Choose saved preset"
+              value={presetSelection}
+              onChange={(e) => setPresetSelection(e.target.value)}
             >
               <option value="">Preset…</option>
               {presets.map((p) => (
@@ -85,14 +155,40 @@ export function GlobalFiltersBar({
                 </option>
               ))}
             </select>
-          </label>
-
+            </label>
+            <div className="preset-icon-actions" role="group" aria-label="Preset actions">
+              <button
+                type="button"
+                className="preset-icon-btn"
+                aria-label="Apply selected preset"
+                title="Apply selected preset"
+                disabled={!presetSelection}
+                onClick={() => onApplyPreset(presetSelection || null)}
+              >
+                <span aria-hidden="true">⤓</span>
+              </button>
+              <button
+                type="button"
+                className="preset-icon-btn preset-icon-btn-danger"
+                aria-label="Delete selected preset"
+                title="Delete selected preset"
+                disabled={!presetSelection}
+                onClick={() => {
+                  if (!presetSelection) return
+                  onDeletePreset(presetSelection)
+                  setPresetSelection('')
+                }}
+              >
+                <span aria-hidden="true">🗑</span>
+              </button>
+            </div>
+          </div>
           <div className="filter-item filter-item-compact preset-save-compact">
-            <span title="Save current filters as a preset">Save as</span>
             <div className="preset-save-inline">
               <input
                 type="text"
-                placeholder="Name"
+                placeholder="Save as…"
+                aria-label="Preset name"
                 title="Preset name"
                 value={saveName}
                 onChange={(e) => setSaveName(e.target.value)}
@@ -109,7 +205,8 @@ export function GlobalFiltersBar({
               />
               <button
                 type="button"
-                className="preset-save-btn"
+                className="preset-icon-btn"
+                aria-label="Save current filters as preset"
                 title="Save current filters as preset"
                 onClick={() => {
                   const n = saveName.trim()
@@ -118,42 +215,10 @@ export function GlobalFiltersBar({
                   setSaveName('')
                 }}
               >
-                Save
+                <span aria-hidden="true">💾</span>
               </button>
             </div>
           </div>
-
-          {presets.length > 0 && (
-            <label className="filter-item filter-item-compact">
-              <span title="Remove a saved preset">Remove</span>
-              <select
-                aria-label="Delete a saved filter preset"
-                title="Delete saved preset"
-                value={deleteSelection}
-                onChange={(e) => {
-                  const id = e.target.value
-                  if (id) {
-                    const p = presets.find((x) => x.id === id)
-                    if (
-                      p &&
-                      typeof window !== 'undefined' &&
-                      window.confirm(`Remove preset “${p.name}”?`)
-                    ) {
-                      onDeletePreset(id)
-                    }
-                  }
-                  setDeleteSelection('')
-                }}
-              >
-                <option value="">Preset…</option>
-                {presets.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
         </div>
       </div>
     </header>

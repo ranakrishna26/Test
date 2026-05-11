@@ -35,6 +35,9 @@ export interface Cell {
 export type SubscriberSegment = 'consumer' | 'enterprise' | 'iot' | 'vip'
 export type SubscriberDevice = 'phone' | 'cpe' | 'module'
 export type SubscriberTimeHorizon = '15m' | '1h' | '24h' | '7d' | '30d'
+export type SubscriberTechnology = '4g' | '5g'
+export type SubscriberService = 'data' | 'voice' | 'messaging' | 'iot'
+export type SubscriberMode = 'sa' | 'nsa'
 
 export interface Subscriber {
   imsi: string
@@ -51,6 +54,12 @@ export interface Subscriber {
   segment: SubscriberSegment
   /** Global filter: device type */
   device: SubscriberDevice
+  /** Global filter: access technology */
+  technology: SubscriberTechnology
+  /** Global filter: primary service profile */
+  service: SubscriberService
+  /** Global quick filter: 5G deployment mode */
+  mode: SubscriberMode
   /** Metrics visible when selected time range is at least this long (synthetic). */
   timeHorizon: SubscriberTimeHorizon
 }
@@ -492,6 +501,29 @@ function pickTimeHorizon(u: number): SubscriberTimeHorizon {
   return '30d'
 }
 
+function pickTechnology(u: number, segment: SubscriberSegment): SubscriberTechnology {
+  if (segment === 'vip') return u < 0.9 ? '5g' : '4g'
+  if (segment === 'enterprise') return u < 0.72 ? '5g' : '4g'
+  return u < 0.64 ? '5g' : '4g'
+}
+
+function pickService(
+  u: number,
+  segment: SubscriberSegment,
+  device: SubscriberDevice,
+): SubscriberService {
+  if (segment === 'iot' || device === 'module') return 'iot'
+  if (segment === 'enterprise' && device === 'cpe') return u < 0.84 ? 'data' : 'voice'
+  if (u < 0.58) return 'data'
+  if (u < 0.8) return 'voice'
+  return 'messaging'
+}
+
+function pickMode(u: number, technology: SubscriberTechnology): SubscriberMode {
+  if (technology === '4g') return u < 0.5 ? 'nsa' : 'sa'
+  return u < 0.46 ? 'sa' : 'nsa'
+}
+
 function buildPlaceholderSubscribers(): Subscriber[] {
   const out: Subscriber[] = []
   let seq = 0
@@ -509,6 +541,9 @@ function buildPlaceholderSubscribers(): Subscriber[] {
       const segment = pickSegment(u0)
       const device = pickDevice(u1, segment)
       let timeHorizon = pickTimeHorizon(u2)
+      const technology = pickTechnology(mix32(seed + 7) / 2 ** 32, segment)
+      const service = pickService(mix32(seed + 8) / 2 ** 32, segment, device)
+      const mode = pickMode(mix32(seed + 9) / 2 ** 32, technology)
       if (segment === 'vip') {
         const ut = mix32(seed + 6) / 2 ** 32
         if (ut < 0.14) timeHorizon = '15m'
@@ -571,6 +606,9 @@ function buildPlaceholderSubscribers(): Subscriber[] {
         hoSuccessPct,
         segment,
         device,
+        technology,
+        service,
+        mode,
         timeHorizon,
       })
     }
@@ -589,6 +627,9 @@ function buildPlaceholderSubscribers(): Subscriber[] {
       hoSuccessPct: 88.9,
       segment: 'vip',
       device: 'phone',
+      technology: '5g',
+      service: 'data',
+      mode: 'sa',
       timeHorizon: '15m',
     }
   }
@@ -611,7 +652,31 @@ const TIME_RANGE_ORDER: Record<SubscriberTimeHorizon, number> = {
   '30d': 5,
 }
 
-function timeRangeCoversSubscriber(selected: string, sub: SubscriberTimeHorizon): boolean {
+function customRangeSpanDays(start: string, end: string): number {
+  if (!start || !end) return 30
+  const startMs = new Date(start).getTime()
+  const endMs = new Date(end).getTime()
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return 30
+  return Math.max(1, Math.round((endMs - startMs) / 86400000) + 1)
+}
+
+function customRangeToTimeRange(start: string, end: string): SubscriberTimeHorizon {
+  const days = customRangeSpanDays(start, end)
+  if (days <= 1) return '24h'
+  if (days <= 7) return '7d'
+  return '30d'
+}
+
+function timeRangeCoversSubscriber(
+  selected: string,
+  sub: SubscriberTimeHorizon,
+  customStart: string,
+  customEnd: string,
+): boolean {
+  if (selected === 'custom') {
+    const derived = customRangeToTimeRange(customStart, customEnd)
+    return TIME_RANGE_ORDER[derived] >= TIME_RANGE_ORDER[sub]
+  }
   const oSel = TIME_RANGE_ORDER[selected as SubscriberTimeHorizon] ?? 3
   const oSub = TIME_RANGE_ORDER[sub]
   return oSel >= oSub
@@ -623,9 +688,20 @@ export function applyGlobalSubscriberFilters(
   f: SubscriberGlobalFilters,
 ): Subscriber[] {
   return subs.filter((s) => {
+    if (f.technology !== 'all' && s.technology !== f.technology) return false
+    if (f.service !== 'all' && s.service !== f.service) return false
+    if (f.networkMode !== 'all' && s.mode !== f.networkMode) return false
     if (f.subscriberType !== 'all' && s.segment !== f.subscriberType) return false
-    if (f.deviceType !== 'all' && s.device !== f.deviceType) return false
-    if (!timeRangeCoversSubscriber(f.timeRange, s.timeHorizon)) return false
+    if (
+      !timeRangeCoversSubscriber(
+        f.timeRange,
+        s.timeHorizon,
+        f.customTimeRangeStart,
+        f.customTimeRangeEnd,
+      )
+    ) {
+      return false
+    }
     return true
   })
 }
@@ -977,6 +1053,8 @@ export function globalTimeRangeLabel(range: string): string {
       return 'Last 7 days'
     case '30d':
       return 'Last 30 days'
+    case 'custom':
+      return 'Custom range'
     default:
       return range
   }

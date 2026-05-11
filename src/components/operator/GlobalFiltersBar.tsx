@@ -60,6 +60,29 @@ export function GlobalFiltersBar({
               <option value="custom">Custom range</option>
             </select>
           </label>
+          {timeRange === 'custom' && (
+            <div className="filter-item custom-time-group">
+              <span>Custom dates</span>
+              <div className="custom-time-inputs">
+                <label>
+                  <span>Start</span>
+                  <input
+                    type="date"
+                    value={customTimeRangeStart}
+                    onChange={(e) => onCustomTimeRangeStart(e.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>End</span>
+                  <input
+                    type="date"
+                    value={customTimeRangeEnd}
+                    onChange={(e) => onCustomTimeRangeEnd(e.target.value)}
+                  />
+                </label>
+              </div>
+            </div>
+          )}
           <div className="mode-toggle-group" role="group" aria-label="5G mode">
             <div className="mode-toggle-buttons">
               <button
@@ -86,29 +109,6 @@ export function GlobalFiltersBar({
               </button>
             </div>
           </div>
-          {timeRange === 'custom' && (
-            <div className="filter-item custom-time-group">
-              <span>Custom dates</span>
-              <div className="custom-time-inputs">
-                <label>
-                  <span>Start</span>
-                  <input
-                    type="date"
-                    value={customTimeRangeStart}
-                    onChange={(e) => onCustomTimeRangeStart(e.target.value)}
-                  />
-                </label>
-                <label>
-                  <span>End</span>
-                  <input
-                    type="date"
-                    value={customTimeRangeEnd}
-                    onChange={(e) => onCustomTimeRangeEnd(e.target.value)}
-                  />
-                </label>
-              </div>
-            </div>
-          )}
           <label className="filter-item">
             <span>Technology</span>
             <select value={technology} onChange={(e) => onTechnology(e.target.value)}>

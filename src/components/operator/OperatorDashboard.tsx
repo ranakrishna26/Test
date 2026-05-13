@@ -55,7 +55,6 @@ import {
   KPI_BY_ID,
   kpiDistributionBins,
   type KpiDistributionBin,
-  tabDefaultKpi,
   type KpiId,
 } from '../../data/kpis'
 
@@ -781,7 +780,6 @@ export function OperatorDashboard() {
 
   function handleTabSelect(tabId: TableTab) {
     setActiveTab(tabId)
-    setSelectedKpiId(tabDefaultKpi(tabId))
     setView('cells')
     setSelectedCellId(null)
     setSelectedImsi(null)
@@ -881,7 +879,6 @@ export function OperatorDashboard() {
     setNetworkMode(filters.networkMode)
     setSubscriberType(filters.subscriberType)
     setCellAttributes(filters.cellAttributes)
-    setSelectedKpiId(filters.selectedKpiId ?? DEFAULT_GLOBAL_FILTER_SNAPSHOT.selectedKpiId)
   }
 
   function handleSavePreset(name: string) {

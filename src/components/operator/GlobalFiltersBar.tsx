@@ -18,7 +18,7 @@ type Props = {
   selectedKpiId: KpiId
   onSelectedKpiId: (v: KpiId) => void
   presets: SavedFilterPreset[]
-  onApplyPreset: (id: string | null) => void
+  onApplyPreset: (id: string) => void
   onSavePreset: (name: string) => void
   onDeletePreset: (id: string | null) => void
 }
@@ -180,7 +180,11 @@ export function GlobalFiltersBar({
               aria-label="Select a saved filter preset"
               title="Choose saved preset"
               value={presetSelection}
-              onChange={(e) => setPresetSelection(e.target.value)}
+              onChange={(e) => {
+                const nextPresetId = e.target.value
+                setPresetSelection(nextPresetId)
+                if (nextPresetId) onApplyPreset(nextPresetId)
+              }}
             >
               <option value="">Preset…</option>
               {presets.map((p) => (
@@ -191,16 +195,6 @@ export function GlobalFiltersBar({
             </select>
             </label>
             <div className="preset-icon-actions" role="group" aria-label="Preset actions">
-              <button
-                type="button"
-                className="preset-icon-btn"
-                aria-label="Apply selected preset"
-                title="Apply selected preset"
-                disabled={!presetSelection}
-                onClick={() => onApplyPreset(presetSelection || null)}
-              >
-                <span aria-hidden="true">⤓</span>
-              </button>
               <button
                 type="button"
                 className="preset-icon-btn preset-icon-btn-danger"

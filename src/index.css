@@ -390,10 +390,6 @@ html {
   gap: 0.85rem;
 }
 
-.detail-pane--sessions .heatmap-grid {
-  height: 150px;
-}
-
 .detail-pane--sessions .compare-select-label {
   max-width: min(100%, 320px);
 }
@@ -1257,26 +1253,6 @@ html {
   font-size: 0.72rem;
   color: var(--muted);
   margin-bottom: 0.35rem;
-}
-
-.heatmap-fig {
-  grid-column: 1 / -1;
-}
-
-.heatmap-grid {
-  display: grid;
-  gap: 2px;
-  height: 120px;
-}
-
-.heatmap-cell {
-  border-radius: 2px;
-  min-height: 12px;
-}
-
-.heatmap-cell--selected {
-  outline: 1px solid #f59e0b;
-  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.36);
 }
 
 .session-selection-chip {

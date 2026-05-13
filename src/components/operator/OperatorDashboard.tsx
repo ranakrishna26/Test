@@ -231,20 +231,6 @@ function cellTableFootprintHint(tab: TableTab): string {
   }
 }
 
-function heatmapData(sessions: ReturnType<typeof getSessions>) {
-  const rows = 6
-  const cols = 8
-  const cells: { x: number; y: number; v: number; label: string }[] = []
-  for (let y = 0; y < rows; y++) {
-    for (let x = 0; x < cols; x++) {
-      const i = (x + y * cols) % Math.max(sessions.length, 1)
-      const v = sessions[i]?.packetLossPct ?? 0.5
-      cells.push({ x, y, v, label: `${v.toFixed(2)}% loss` })
-    }
-  }
-  return { rows, cols, cells }
-}
-
 function cellDetailColSpan(tab: TableTab): number {
   return tab === 'payload' || tab === 'handover' ? 6 : 5
 }
@@ -626,7 +612,6 @@ export function OperatorDashboard() {
     () => scatterSourceSessions.map((s) => ({ x: s.signalQuality, y: s.throughputMbps, id: s.id })),
     [scatterSourceSessions],
   )
-  const heatmap = useMemo(() => heatmapData(analyticsSessions), [analyticsSessions])
   const analyticsSessionIdSet = useMemo(
     () => new Set(analyticsSessions.map((session) => session.id)),
     [analyticsSessions],
@@ -667,14 +652,6 @@ export function OperatorDashboard() {
     () => (isCellFocusView ? [] : scatterData.filter((d) => selectedSessionIdSet.has(d.id))),
     [isCellFocusView, scatterData, selectedSessionIdSet],
   )
-  const selectedHeatmapIndexes = useMemo(() => {
-    if (!selectedSessionIdSet.size || !heatmap.cells.length) return new Set<number>()
-    const indexes = new Set<number>()
-    analyticsSessions.forEach((s, idx) => {
-      if (selectedSessionIdSet.has(s.id)) indexes.add(idx % heatmap.cells.length)
-    })
-    return indexes
-  }, [analyticsSessions, selectedSessionIdSet, heatmap.cells.length])
 
   const comparisonSourceSessions = useMemo(
     () =>
@@ -805,6 +782,13 @@ export function OperatorDashboard() {
   function handleTabSelect(tabId: TableTab) {
     setActiveTab(tabId)
     setSelectedKpiId(tabDefaultKpi(tabId))
+    setView('cells')
+    setSelectedCellId(null)
+    setSelectedImsi(null)
+    setSessionCellFilter(null)
+    setSelectedSessionIds([])
+    setSessionSelectionAnchorId(null)
+    setExpandedSubscriberIds(new Set())
   }
 
   function selectSingleSession(sessionId: string) {
@@ -886,8 +870,7 @@ export function OperatorDashboard() {
     }
   }
 
-  function handleApplyPreset(id: string | null) {
-    if (!id) return
+  function handleApplyPreset(id: string) {
     const preset = filterPresets.find((p) => p.id === id)
     if (!preset) return
     const { filters } = preset
@@ -962,25 +945,6 @@ export function OperatorDashboard() {
               />
             </label>
 
-            {view === 'subscribers' && selectedCellId && (
-              <TableNavBreadcrumb
-                view="subscribers"
-                selectedCellId={selectedCellId}
-                selectedImsi={null}
-                onToCells={backToCells}
-                onToSubscribers={backToSubscribers}
-              />
-            )}
-            {view === 'sessions' && selectedImsi && (
-              <TableNavBreadcrumb
-                view="sessions"
-                selectedCellId={selectedCellId}
-                selectedImsi={selectedImsi}
-                onToCells={backToCells}
-                onToSubscribers={backToSubscribers}
-              />
-            )}
-
             {view === 'cells' && tableImsiSearch.trim() && imsiQuickMatches.length > 0 && (
               <div className="quick-matches">
                 <span className="quick-matches-label">Matching subscribers (open session view)</span>
@@ -1008,6 +972,25 @@ export function OperatorDashboard() {
                 </button>
               ))}
             </div>
+
+            {view === 'subscribers' && selectedCellId && (
+              <TableNavBreadcrumb
+                view="subscribers"
+                selectedCellId={selectedCellId}
+                selectedImsi={null}
+                onToCells={backToCells}
+                onToSubscribers={backToSubscribers}
+              />
+            )}
+            {view === 'sessions' && selectedImsi && (
+              <TableNavBreadcrumb
+                view="sessions"
+                selectedCellId={selectedCellId}
+                selectedImsi={selectedImsi}
+                onToCells={backToCells}
+                onToSubscribers={backToSubscribers}
+              />
+            )}
 
             {view === 'cells' && (
               <>
@@ -1638,33 +1621,6 @@ export function OperatorDashboard() {
                           )}
                         </ScatterChart>
                       </ResponsiveContainer>
-                    </figure>
-                    <figure className="chart-fig heatmap-fig">
-                      <figcaption>
-                        {isCellFocusView
-                          ? 'Heatmap · packet loss (cell-footprint placeholder grid)'
-                          : 'Heatmap · packet loss (placeholder grid)'}
-                      </figcaption>
-                      <div
-                        className="heatmap-grid"
-                        style={{
-                          gridTemplateColumns: `repeat(${heatmap.cols}, 1fr)`,
-                        }}
-                      >
-                        {heatmap.cells.map((cell, idx) => (
-                          <div
-                            key={idx}
-                            className={`heatmap-cell ${
-                              selectedHeatmapIndexes.has(idx) ? 'heatmap-cell--selected' : ''
-                            }`}
-                            title={cell.label}
-                            style={{
-                              opacity: 0.32 + (cell.v / 3) * 0.5,
-                              background: `hsl(220, 55%, ${38 - cell.v * 8}%)`,
-                            }}
-                          />
-                        ))}
-                      </div>
                     </figure>
                   </div>
                 </div>

@@ -161,6 +161,10 @@ html {
   min-width: 0;
 }
 
+.filter-kpi select {
+  min-width: 13.5rem;
+}
+
 .mode-toggle-group {
   display: flex;
   align-items: center;
@@ -388,10 +392,6 @@ html {
 
 .detail-pane--sessions .heatmap-grid {
   height: 150px;
-}
-
-.detail-pane--sessions .compare-chart-fig .compare-x-labels {
-  max-width: min(100%, 480px);
 }
 
 .detail-pane--sessions .compare-select-label {
@@ -1307,6 +1307,21 @@ html {
   gap: 0.65rem;
 }
 
+.compare-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--text);
+  width: fit-content;
+}
+
+.compare-toggle input[type='checkbox'] {
+  width: 0.9rem;
+  height: 0.9rem;
+  accent-color: #60a5fa;
+}
+
 .compare-select-label {
   display: flex;
   flex-direction: column;
@@ -1358,30 +1373,73 @@ html {
   width: 100%;
 }
 
-.compare-x-labels {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.5rem;
-  text-align: center;
-  margin-top: 0.35rem;
-  padding: 0 0.5rem 0.25rem;
-  max-width: 360px;
-  margin-left: auto;
-  margin-right: auto;
+.compare-chart-header {
+  margin-bottom: 0.45rem;
 }
 
-.compare-x-name {
-  display: block;
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: var(--text);
+.compare-chart-header figcaption {
+  margin-bottom: 0.32rem;
 }
 
-.compare-x-period {
-  display: block;
+.compare-top-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.8rem;
+  align-items: center;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.compare-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  min-height: 1rem;
+}
+
+.compare-legend-marker {
+  display: inline-block;
+  flex: 0 0 auto;
+}
+
+.compare-legend-marker--period-a {
+  width: 0.82rem;
+  height: 0.48rem;
+  border-radius: 2px;
+  background: #60a5fa;
+}
+
+.compare-legend-marker--period-b {
+  width: 0.82rem;
+  height: 0.48rem;
+  border-radius: 2px;
+  background: #94a3b8;
+}
+
+.compare-legend-marker--cdf-a {
+  width: 0.95rem;
+  border-top: 2px solid #f59e0b;
+}
+
+.compare-legend-marker--cdf-b {
+  width: 0.95rem;
+  border-top: 2px dashed #22d3ee;
+}
+
+.compare-legend-text {
   font-size: 0.7rem;
   color: var(--muted);
-  line-height: 1.3;
+  line-height: 1.2;
+}
+
+.compare-legend-text strong {
+  color: var(--text);
+  font-weight: 600;
+  margin-right: 0.2rem;
+}
+
+.compare-footnote {
+  margin: 0.35rem 0 0;
 }
 
 .chart-tooltip {

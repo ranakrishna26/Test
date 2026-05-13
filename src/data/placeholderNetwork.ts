@@ -4,8 +4,15 @@ import {
   ALL_SUBSCRIBER_FILTERS,
   type SubscriberGlobalFilters,
 } from '../utils/filterPresets'
+import {
+  KPI_BY_ID,
+  formatKpiValueByDefinition,
+  type KpiDefinition,
+  type KpiId,
+} from './kpis'
 
 export type TableTab = 'failure' | 'callDrop' | 'payload' | 'handover'
+export type KpiStateBand = 'meetsTarget' | 'nearBreach' | 'breached'
 
 export interface Cell {
   id: string
@@ -54,7 +61,7 @@ export interface Subscriber {
   segment: SubscriberSegment
   /** Global filter: device type */
   device: SubscriberDevice
-  /** Global filter: access technology */
+  /** Access technology (kept for analytics/drill-down context). */
   technology: SubscriberTechnology
   /** Global filter: primary service profile */
   service: SubscriberService
@@ -688,7 +695,6 @@ export function applyGlobalSubscriberFilters(
   f: SubscriberGlobalFilters,
 ): Subscriber[] {
   return subs.filter((s) => {
-    if (f.technology !== 'all' && s.technology !== f.technology) return false
     if (f.service !== 'all' && s.service !== f.service) return false
     if (f.networkMode !== 'all' && s.mode !== f.networkMode) return false
     if (f.subscriberType !== 'all' && s.segment !== f.subscriberType) return false
@@ -704,6 +710,279 @@ export function applyGlobalSubscriberFilters(
     }
     return true
   })
+}
+
+function clampKpi(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v))
+}
+
+function syntheticAttachSuccessPct(subscribers: Subscriber[]): number {
+  if (!subscribers.length) return 0
+  const attempts = subscribers.reduce((acc, s) => acc + Math.max(s.sessions, 1), 0)
+  const failures = subscribers.reduce((acc, s) => acc + s.setupAccessFailures, 0)
+  return clampKpi(((attempts - failures) / attempts) * 100, 50, 100)
+}
+
+function syntheticNrrrcSetupSuccessPct(subscribers: Subscriber[]): number {
+  const attach = syntheticAttachSuccessPct(subscribers)
+  const dropPenalty = subscribers.length
+    ? subscribers.reduce((acc, s) => acc + s.callDrops, 0) / subscribers.length
+    : 0
+  return clampKpi(attach - dropPenalty * 0.6, 45, 100)
+}
+
+function syntheticX2Xn1SuccessPct(subscribers: Subscriber[]): number {
+  if (!subscribers.length) return 0
+  const hoAvg =
+    subscribers.reduce((acc, s) => acc + s.hoSuccessPct, 0) / subscribers.length
+  return clampKpi(hoAvg - 1.4, 45, 100)
+}
+
+function syntheticIratHos(subscribers: Subscriber[]): number {
+  return subscribers.reduce((acc, s) => acc + Math.round(s.sessions * 0.22), 0)
+}
+
+function syntheticRsrp(subscribers: Subscriber[]): number {
+  if (!subscribers.length) return -120
+  const avgDl = subscribers.reduce((acc, s) => acc + s.dlMbps, 0) / subscribers.length
+  return -112 + avgDl * 0.32
+}
+
+function syntheticRsrq(subscribers: Subscriber[]): number {
+  if (!subscribers.length) return -20
+  const avgUl = subscribers.reduce((acc, s) => acc + s.ulMbps, 0) / subscribers.length
+  return -16.5 + avgUl * 0.42
+}
+
+function syntheticDisnr(subscribers: Subscriber[]): number {
+  return clampKpi((syntheticRsrp(subscribers) + 118) * 0.55, -2, 30)
+}
+
+function syntheticUisnr(subscribers: Subscriber[]): number {
+  return clampKpi((syntheticRsrq(subscribers) + 18) * 1.4, -4, 28)
+}
+
+function syntheticBler(subscribers: Subscriber[]): number {
+  if (!subscribers.length) return 0
+  const failures = subscribers.reduce((acc, s) => acc + s.setupAccessFailures + s.callDrops, 0)
+  const sessions = subscribers.reduce((acc, s) => acc + Math.max(s.sessions, 1), 0)
+  return clampKpi((failures / sessions) * 100, 0, 40)
+}
+
+function syntheticCqi(subscribers: Subscriber[]): number {
+  return clampKpi((syntheticRsrp(subscribers) + 120) / 2.1, 1, 15)
+}
+
+function syntheticOtaDelayMs(subscribers: Subscriber[]): number {
+  if (!subscribers.length) return 0
+  const avgDl = subscribers.reduce((acc, s) => acc + s.dlMbps, 0) / subscribers.length
+  const avgDrops = subscribers.reduce((acc, s) => acc + s.callDrops, 0) / subscribers.length
+  return clampKpi(95 - avgDl * 0.8 + avgDrops * 2.3, 8, 180)
+}
+
+function syntheticOtaDrops(subscribers: Subscriber[]): number {
+  if (!subscribers.length) return 0
+  const dropEvents = subscribers.reduce((acc, s) => acc + s.callDrops, 0)
+  return dropEvents / subscribers.length
+}
+
+function subscribersForCellKpi(
+  cell: Cell,
+  filters: SubscriberGlobalFilters,
+): { scoped: Subscriber[]; fromAnchors: boolean } {
+  const raw = subscribersForFootprint(cell.id)
+  if (!raw.length) return { scoped: [], fromAnchors: false }
+  return { scoped: applyGlobalSubscriberFilters(raw, filters), fromAnchors: true }
+}
+
+export function kpiDefinition(kpiId: KpiId): KpiDefinition {
+  return KPI_BY_ID[kpiId]
+}
+
+export function formatKpiValue(kpiId: KpiId, value: number): string {
+  return formatKpiValueByDefinition(kpiDefinition(kpiId), value)
+}
+
+export function sessionKpiValue(session: SessionRow, kpiId: KpiId): number {
+  switch (kpiId) {
+    case 'connectivity_attach_success_pct':
+      return clampKpi(100 - session.setupAccessFailures * 21, 0, 100)
+    case 'connectivity_nr_rrc_setup_success_pct':
+      return clampKpi(99 - session.setupAccessFailures * 16 - session.callDrops * 6, 0, 100)
+    case 'reliability_rlf_count':
+      return session.setupAccessFailures + session.callDrops
+    case 'reliability_x2_xn1_setup_success_pct':
+      return clampKpi(97 - session.callDrops * 14 - session.setupAccessFailures * 6, 0, 100)
+    case 'reliability_5g_ho_success_pct':
+      return session.handoverAttempted ? (session.handoverSuccess ? 98 : 84) : 96
+    case 'reliability_irat_hos':
+      return session.handoverAttempted ? (session.handoverSuccess ? 1 : 2) : 0
+    case 'signal_rsrp':
+      return -120 + session.signalQuality * 6.4
+    case 'signal_rsrq':
+      return -19 + session.signalQuality * 2.2
+    case 'signal_disnr':
+      return session.signalQuality * 4.3
+    case 'signal_uisnr':
+      return session.signalQuality * 3.9
+    case 'signal_bler':
+      return clampKpi(session.packetLossPct * 1.5 + session.callDrops * 0.9, 0, 100)
+    case 'signal_cqi':
+      return clampKpi(session.signalQuality * 3.2 + 1.2, 1, 15)
+    case 'throughput_dl_mbps':
+      return session.throughputMbps
+    case 'throughput_ul_mbps':
+      return session.ulMbps
+    case 'packet_ota_delay_ms':
+      return clampKpi(26 + session.packetLossPct * 12 + session.callDrops * 8, 6, 220)
+    case 'packet_ota_drops':
+      return clampKpi(session.packetLossPct * 0.8 + session.callDrops, 0, 30)
+    default:
+      return 0
+  }
+}
+
+export function subscriberKpiValue(subscriber: Subscriber, kpiId: KpiId): number {
+  switch (kpiId) {
+    case 'connectivity_attach_success_pct':
+      return clampKpi(100 - (subscriber.setupAccessFailures / Math.max(subscriber.sessions, 1)) * 100, 0, 100)
+    case 'connectivity_nr_rrc_setup_success_pct':
+      return clampKpi(99 - (subscriber.setupAccessFailures * 1.9 + subscriber.callDrops * 0.7), 0, 100)
+    case 'reliability_rlf_count':
+      return subscriber.setupAccessFailures + subscriber.callDrops
+    case 'reliability_x2_xn1_setup_success_pct':
+      return clampKpi(subscriber.hoSuccessPct - subscriber.callDrops * 0.4, 0, 100)
+    case 'reliability_5g_ho_success_pct':
+      return subscriber.hoSuccessPct
+    case 'reliability_irat_hos':
+      return Math.round(subscriber.sessions * 0.22)
+    case 'signal_rsrp':
+      return -112 + subscriber.dlMbps * 0.34
+    case 'signal_rsrq':
+      return -16.5 + subscriber.ulMbps * 0.44
+    case 'signal_disnr':
+      return clampKpi((subscriber.dlMbps + subscriber.ulMbps) / 4.4, 0, 30)
+    case 'signal_uisnr':
+      return clampKpi(subscriber.ulMbps / 1.35, 0, 28)
+    case 'signal_bler':
+      return clampKpi(
+        ((subscriber.setupAccessFailures + subscriber.callDrops) / Math.max(subscriber.sessions, 1)) * 100,
+        0,
+        40,
+      )
+    case 'signal_cqi':
+      return clampKpi(2 + subscriber.dlMbps / 8, 1, 15)
+    case 'throughput_dl_mbps':
+      return subscriber.dlMbps
+    case 'throughput_ul_mbps':
+      return subscriber.ulMbps
+    case 'packet_ota_delay_ms':
+      return clampKpi(95 - subscriber.dlMbps * 0.75 + subscriber.callDrops * 1.7, 8, 180)
+    case 'packet_ota_drops':
+      return subscriber.callDrops / Math.max(subscriber.sessions / 10, 1)
+    default:
+      return 0
+  }
+}
+
+export function cellKpiValue(
+  cell: Cell,
+  filters: SubscriberGlobalFilters = ALL_SUBSCRIBER_FILTERS,
+  kpiId: KpiId,
+): number {
+  const { scoped, fromAnchors } = subscribersForCellKpi(cell, filters)
+  if (!fromAnchors) {
+    switch (kpiId) {
+      case 'throughput_dl_mbps':
+        return cell.dlMbps
+      case 'throughput_ul_mbps':
+        return cell.ulMbps
+      case 'reliability_5g_ho_success_pct':
+        return cell.hoSuccessPct
+      case 'reliability_rlf_count':
+        return cell.setupAccessFailures + cell.callDrops
+      case 'reliability_irat_hos':
+        return Math.round(cell.totalHandovers * 0.22)
+      default:
+        return 0
+    }
+  }
+  if (!scoped.length) return 0
+  switch (kpiId) {
+    case 'connectivity_attach_success_pct':
+      return syntheticAttachSuccessPct(scoped)
+    case 'connectivity_nr_rrc_setup_success_pct':
+      return syntheticNrrrcSetupSuccessPct(scoped)
+    case 'reliability_rlf_count':
+      return scoped.reduce((acc, s) => acc + s.setupAccessFailures + s.callDrops, 0)
+    case 'reliability_x2_xn1_setup_success_pct':
+      return syntheticX2Xn1SuccessPct(scoped)
+    case 'reliability_5g_ho_success_pct':
+      return scoped.reduce((acc, s) => acc + s.hoSuccessPct, 0) / scoped.length
+    case 'reliability_irat_hos':
+      return syntheticIratHos(scoped)
+    case 'signal_rsrp':
+      return syntheticRsrp(scoped)
+    case 'signal_rsrq':
+      return syntheticRsrq(scoped)
+    case 'signal_disnr':
+      return syntheticDisnr(scoped)
+    case 'signal_uisnr':
+      return syntheticUisnr(scoped)
+    case 'signal_bler':
+      return syntheticBler(scoped)
+    case 'signal_cqi':
+      return syntheticCqi(scoped)
+    case 'throughput_dl_mbps':
+      return scoped.reduce((acc, s) => acc + s.dlMbps, 0) / scoped.length
+    case 'throughput_ul_mbps':
+      return scoped.reduce((acc, s) => acc + s.ulMbps, 0) / scoped.length
+    case 'packet_ota_delay_ms':
+      return syntheticOtaDelayMs(scoped)
+    case 'packet_ota_drops':
+      return syntheticOtaDrops(scoped)
+    default:
+      return 0
+  }
+}
+
+export function kpiBand(kpiId: KpiId, value: number): KpiStateBand {
+  const meta = kpiDefinition(kpiId)
+  if (!meta.thresholds) return 'nearBreach'
+  if (meta.direction === 'higher_is_better') {
+    if (value >= meta.thresholds.good) return 'meetsTarget'
+    if (value >= meta.thresholds.warning) return 'nearBreach'
+    return 'breached'
+  }
+  if (value <= meta.thresholds.good) return 'meetsTarget'
+  if (value <= meta.thresholds.warning) return 'nearBreach'
+  return 'breached'
+}
+
+export function rankedCellsByKpi(
+  kpiId: KpiId,
+  f: SubscriberGlobalFilters = ALL_SUBSCRIBER_FILTERS,
+): Cell[] {
+  const list = [...CELLS]
+  list.sort((a, b) => {
+    const av = cellKpiValue(a, f, kpiId)
+    const bv = cellKpiValue(b, f, kpiId)
+    const direction = kpiDefinition(kpiId).direction
+    if (direction === 'higher_is_better') return bv - av
+    return av - bv
+  })
+  return list
+}
+
+export function sortSubscribersByKpi(rows: Subscriber[], kpiId: KpiId): Subscriber[] {
+  const direction = kpiDefinition(kpiId).direction
+  const copy = [...rows]
+  copy.sort((a, b) => {
+    const av = subscriberKpiValue(a, kpiId)
+    const bv = subscriberKpiValue(b, kpiId)
+    return direction === 'higher_is_better' ? bv - av : av - bv
+  })
+  return copy
 }
 
 /**
@@ -1008,6 +1287,7 @@ export function hoverKpisForCell(
 export function mapCellSummaryLines(
   c: Cell,
   f: SubscriberGlobalFilters = ALL_SUBSCRIBER_FILTERS,
+  selectedKpiId?: KpiId,
 ): string[] {
   const fm = cellTableFailureMetrics(c, f)
   const dr = cellTableCallDropMetrics(c, f)
@@ -1026,6 +1306,14 @@ export function mapCellSummaryLines(
     `HO ${hoShown.toFixed(1)}% · ${c.totalHandovers.toLocaleString()} handovers`,
     `Drops (RAN cell) ${dropShown} · Setup/access (RAN cell) ${failShown}`,
   ]
+  if (selectedKpiId) {
+    lines.push(
+      `Selected KPI · ${kpiDefinition(selectedKpiId).label}: ${formatKpiValue(
+        selectedKpiId,
+        cellKpiValue(c, f, selectedKpiId),
+      )}`,
+    )
+  }
   if (fm.fromAnchors) {
     if (fm.total > 0) {
       lines.push(
@@ -1116,6 +1404,17 @@ export function comparisonKpiFromTab(tab: TableTab): {
   return { label: 'HO success %', format: (v) => `${v.toFixed(1)}%` }
 }
 
+export function comparisonKpiMeta(kpiId: KpiId): {
+  label: string
+  format: (v: number) => string
+} {
+  const definition = kpiDefinition(kpiId)
+  return {
+    label: definition.label,
+    format: (value) => formatKpiValue(kpiId, value),
+  }
+}
+
 export function aggregateKpiFromSessions(
   sessions: SessionRow[],
   tab: TableTab,
@@ -1136,6 +1435,14 @@ export function aggregateKpiFromSessions(
   return (100 * ok) / attempted
 }
 
+export function aggregateKpiFromSessionsByKpi(
+  sessions: SessionRow[],
+  kpiId: KpiId,
+): number {
+  if (!sessions.length) return 0
+  return sessions.reduce((sum, session) => sum + sessionKpiValue(session, kpiId), 0) / sessions.length
+}
+
 export function computePeriodBKpiValue(
   valueA: number,
   tab: TableTab,
@@ -1153,6 +1460,22 @@ export function computePeriodBKpiValue(
     return Math.max(0, valueA * (1 + (base - 1) * 0.22))
   }
   return Math.max(0, Math.round(valueA * base))
+}
+
+export function computePeriodBKpiValueByKpi(
+  valueA: number,
+  kpiId: KpiId,
+  option: ComparePeriodOption,
+  customStart: string,
+  customEnd: string,
+): number {
+  const weight = compareWindowWeight(option, customStart, customEnd)
+  const delta = (weight / 0.55 - 1) * 0.17
+  const definition = kpiDefinition(kpiId)
+  if (definition.direction === 'higher_is_better') {
+    return Math.max(0, valueA * (1 - delta))
+  }
+  return Math.max(0, valueA * (1 + delta))
 }
 
 export type { SubscriberGlobalFilters } from '../utils/filterPresets'

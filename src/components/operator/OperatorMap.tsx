@@ -8,15 +8,20 @@ import {
   VIP_HIGHWAY_IMSI,
   applyGlobalSubscriberFilters,
   cellById,
+  formatKpiValue,
+  kpiBand,
+  kpiDefinition,
   mapCellSummaryLines,
   neighborSet,
+  sessionKpiValue,
   subscribersForFootprint,
   subscriberFootprint,
   type Cell,
+  type KpiStateBand,
   type SessionRow,
   type SubscriberGlobalFilters,
-  type TableTab,
 } from '../../data/placeholderNetwork'
+import type { KpiId } from '../../data/kpis'
 
 type MapMode = 'all' | 'cellFocus' | 'subscriberFocus'
 
@@ -24,7 +29,7 @@ type Props = {
   mode: MapMode
   selectedCellId: string | null
   subscriberImsi: string | null
-  activeTab: TableTab
+  selectedKpiId: KpiId
   sessions: SessionRow[]
   selectedSessionIds?: string[]
   onSessionSelect?: (sessionId: string) => void
@@ -332,44 +337,31 @@ function wedgePolygon(
 
 function operatorBandForKpi(
   s: SessionRow,
-  tab: TableTab,
+  selectedKpiId: KpiId,
   tunnelPenalty: number,
   jitter: number,
 ): {
-  state: PixelProps['kpiState']
+  state: KpiStateBand
   label: string
   value: number
   display: string
 } {
-  if (tab === 'failure') {
-    const value = clamp(s.setupAccessFailures + (tunnelPenalty + jitter) / 48, 0, 5)
-    if (value >= 2) return { state: 'breached', label: 'Bad', value, display: `${value.toFixed(1)} events/session` }
-    if (value >= 1) return { state: 'nearBreach', label: 'Warning', value, display: `${value.toFixed(1)} events/session` }
-    return { state: 'meetsTarget', label: 'Good', value, display: `${value.toFixed(1)} events/session` }
-  }
-  if (tab === 'callDrop') {
-    const value = clamp(s.callDrops + (tunnelPenalty + jitter) / 62, 0, 4)
-    if (value >= 2) return { state: 'breached', label: 'Bad', value, display: `${value.toFixed(1)} drops/session` }
-    if (value >= 1) return { state: 'nearBreach', label: 'Warning', value, display: `${value.toFixed(1)} drops/session` }
-    return { state: 'meetsTarget', label: 'Good', value, display: `${value.toFixed(1)} drops/session` }
-  }
-  if (tab === 'payload') {
-    const value = clamp(s.throughputMbps - (tunnelPenalty + jitter) * 0.36, 0, 150)
-    if (value < 10) return { state: 'breached', label: 'Bad', value, display: `${value.toFixed(1)} Mbps` }
-    if (value < 20) return { state: 'nearBreach', label: 'Warning', value, display: `${value.toFixed(1)} Mbps` }
-    return { state: 'meetsTarget', label: 'Good', value, display: `${value.toFixed(1)} Mbps` }
-  }
-  const base = s.handoverAttempted ? (s.handoverSuccess ? 98 : 88) : 95
-  const value = clamp(base - (tunnelPenalty + jitter) * 0.26, 70, 100)
-  if (value < 92) return { state: 'breached', label: 'Bad', value, display: `${value.toFixed(1)}%` }
-  if (value < 96) return { state: 'nearBreach', label: 'Warning', value, display: `${value.toFixed(1)}%` }
-  return { state: 'meetsTarget', label: 'Good', value, display: `${value.toFixed(1)}%` }
+  const definition = kpiDefinition(selectedKpiId)
+  const baseValue = sessionKpiValue(s, selectedKpiId)
+  const stressFactor = clamp((tunnelPenalty + jitter) / 320, 0, 0.36)
+  const value =
+    definition.direction === 'higher_is_better'
+      ? baseValue * (1 - stressFactor)
+      : baseValue * (1 + stressFactor)
+  const state = kpiBand(selectedKpiId, value)
+  const label = state === 'meetsTarget' ? 'Good' : state === 'nearBreach' ? 'Warning' : 'Bad'
+  return { state, label, value, display: formatKpiValue(selectedKpiId, value) }
 }
 
 function makeSessionJourneyPoints(
   imsi: string,
   sessions: SessionRow[],
-  tab: TableTab,
+  selectedKpiId: KpiId,
   period: 'A' | 'B',
   selectedSessionIds: Set<string>,
 ): Feature<Point, PixelProps>[] {
@@ -425,7 +417,12 @@ function makeSessionJourneyPoints(
         const nearestHandover = handoverCenters.reduce((best, x) => Math.min(best, Math.abs(progress - x)), 1)
         const handoverPenalty = nearestHandover < 0.07 ? (1 - nearestHandover / 0.07) * 26 : 0
         const jitter = rand01(seed + (sessionIdx * 97 + j * 17) * 17) * 7
-        const band = operatorBandForKpi(s, tab, tunnel + periodPenalty + handoverPenalty, jitter)
+        const band = operatorBandForKpi(
+          s,
+          selectedKpiId,
+          tunnel + periodPenalty + handoverPenalty,
+          jitter,
+        )
         features.push({
           type: 'Feature',
           geometry: { type: 'Point', coordinates: [safeLng, safeLat] },
@@ -503,7 +500,12 @@ function makeSessionJourneyPoints(
             ? 18
             : 0
       const jitter = rand01(seed + ord * 17) * 7
-      const band = operatorBandForKpi(s, tab, tunnel + periodPenalty + handoverStress, jitter)
+      const band = operatorBandForKpi(
+        s,
+        selectedKpiId,
+        tunnel + periodPenalty + handoverStress,
+        jitter,
+      )
       features.push({
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [safeLng, safeLat] },
@@ -527,7 +529,7 @@ function makeSessionJourneyPoints(
 
 function makeActivityCloud(
   subscribers: typeof SUBSCRIBERS,
-  tab: TableTab,
+  selectedKpiId: KpiId,
   period: 'A' | 'B',
   selectedSessionIds: Set<string>,
 ): Feature<Point, PixelProps>[] {
@@ -598,7 +600,12 @@ function makeActivityCloud(
       handoverAttempted: true,
       handoverSuccess: s.hoSuccessPct > 90,
     }
-    const band = operatorBandForKpi(pseudoSession, tab, periodPenalty, rand01(seed + 5) * 8)
+    const band = operatorBandForKpi(
+      pseudoSession,
+      selectedKpiId,
+      periodPenalty,
+      rand01(seed + 5) * 8,
+    )
     features.push({
       type: 'Feature',
       geometry: {
@@ -626,7 +633,7 @@ export function OperatorMap({
   mode,
   selectedCellId,
   subscriberImsi,
-  activeTab,
+  selectedKpiId,
   sessions,
   selectedSessionIds = [],
   onSessionSelect,
@@ -650,6 +657,11 @@ export function OperatorMap({
   const [showPeriodB, setShowPeriodB] = useState(true)
   const [legendCollapsed, setLegendCollapsed] = useState(false)
   const [mapError, setMapError] = useState<string | null>(null)
+  const deferMapError = (message: string) => {
+    setTimeout(() => {
+      setMapError(message)
+    }, 0)
+  }
   const canShowPeriodBOverlay = mode === 'subscriberFocus'
   const showPeriodBOverlay = canShowPeriodBOverlay && showPeriodB
 
@@ -691,41 +703,49 @@ export function OperatorMap({
           cellId: c.id,
           opacity,
           selected: selectedCellId === c.id ? 1 : 0,
-          tooltipHtml: mapCellSummaryLines(c, filters).join('<br/>'),
+          tooltipHtml: mapCellSummaryLines(c, filters, selectedKpiId).join('<br/>'),
         },
       }
     })
     return { type: 'FeatureCollection', features }
-  }, [mode, selectedCellId, subscriberImsi, direct, all, filters])
+  }, [mode, selectedCellId, subscriberImsi, direct, all, filters, selectedKpiId])
 
   const pixelCollection = useMemo<FeatureCollection<Point, PixelProps>>(() => {
-    let features: Feature<Point, PixelProps>[] = []
     if (mode === 'subscriberFocus' && subscriberImsi) {
-      features = makeSessionJourneyPoints(
+      const featuresA = makeSessionJourneyPoints(
         subscriberImsi,
         sessions,
-        activeTab,
+        selectedKpiId,
         'A',
         selectedSessionIdSet,
       )
-      if (showPeriodBOverlay) {
-        features = features.concat(
-          makeSessionJourneyPoints(subscriberImsi, sessions, activeTab, 'B', selectedSessionIdSet),
-        )
-      }
-    } else {
-      const baseSubs =
-        mode === 'cellFocus' && selectedCellId
-          ? applyGlobalSubscriberFilters(subscribersForFootprint(selectedCellId), filters)
-          : applyGlobalSubscriberFilters(SUBSCRIBERS, filters)
-      const scoped =
-        mode === 'cellFocus' && selectedCellId
-          ? baseSubs.filter((s) => neighborSet(selectedCellId).has(s.cellId))
-          : baseSubs
-      features = makeActivityCloud(scoped, activeTab, 'A', selectedSessionIdSet)
-      if (showPeriodBOverlay)
-        features = features.concat(makeActivityCloud(scoped, activeTab, 'B', selectedSessionIdSet))
+      const features = showPeriodBOverlay
+        ? featuresA.concat(
+            makeSessionJourneyPoints(
+              subscriberImsi,
+              sessions,
+              selectedKpiId,
+              'B',
+              selectedSessionIdSet,
+            ),
+          )
+        : featuresA
+      return { type: 'FeatureCollection', features }
     }
+    const baseSubs =
+      mode === 'cellFocus' && selectedCellId
+        ? applyGlobalSubscriberFilters(subscribersForFootprint(selectedCellId), filters)
+        : applyGlobalSubscriberFilters(SUBSCRIBERS, filters)
+    const scoped =
+      mode === 'cellFocus' && selectedCellId
+        ? baseSubs.filter((s) => neighborSet(selectedCellId).has(s.cellId))
+        : baseSubs
+    const featuresA = makeActivityCloud(scoped, selectedKpiId, 'A', selectedSessionIdSet)
+    const features = showPeriodBOverlay
+      ? featuresA.concat(
+          makeActivityCloud(scoped, selectedKpiId, 'B', selectedSessionIdSet),
+        )
+      : featuresA
     return { type: 'FeatureCollection', features }
   }, [
     mode,
@@ -734,7 +754,7 @@ export function OperatorMap({
     sessions,
     selectedSessionIdSet,
     filters,
-    activeTab,
+    selectedKpiId,
     showPeriodBOverlay,
   ])
 
@@ -764,7 +784,7 @@ export function OperatorMap({
         import.meta.env.VITE_MAPBOX_ACCESS_TOKEN ?? MAPBOX_FALLBACK_ACCESS_TOKEN
     }
     if (!mapboxgl.accessToken) {
-      setMapError('Map unavailable: missing VITE_MAPBOX_ACCESS_TOKEN')
+      deferMapError('Map unavailable: missing VITE_MAPBOX_ACCESS_TOKEN')
       return
     }
     const configuredStyle = (import.meta.env.VITE_MAPBOX_STYLE_URL ?? '').trim()
@@ -783,7 +803,7 @@ export function OperatorMap({
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Map initialization failed'
-      setMapError(message)
+      deferMapError(message)
       return
     }
     mapRef.current = map
@@ -912,7 +932,8 @@ export function OperatorMap({
               `<li>Session ${sessionId || 'n/a'}</li>`,
               `<li>${cellName} (${cellId || 'n/a'})</li>`,
               `<li>Subscriber: ${imsi || 'n/a'}</li>`,
-              `<li>Period ${period} · ${kpiStateLabel} (${kpiValueDisplay})</li>`,
+              `<li>Period ${period} · ${kpiDefinition(selectedKpiId).label}</li>`,
+              `<li>${kpiStateLabel} (${kpiValueDisplay})</li>`,
               '</ul>',
             ].join(''),
           )
@@ -975,7 +996,7 @@ export function OperatorMap({
       mapRef.current = null
       setMapReady(false)
     }
-  }, [onCellSelect, onMapBackgroundClick, onSessionSelect])
+  }, [onCellSelect, onMapBackgroundClick, onSessionSelect, selectedKpiId])
 
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
@@ -1004,7 +1025,7 @@ export function OperatorMap({
       )
     } catch {
       // Avoid hard-crashing React render path when style/layers are still resolving.
-      setMapError('Map layers are still loading, please retry in a moment.')
+      deferMapError('Map layers are still loading, please retry in a moment.')
     }
   }, [mapReady, showPixels, showPeriodBOverlay])
 
@@ -1034,7 +1055,7 @@ export function OperatorMap({
       const selectedPoint = selectedPeriodAPoints[0]
       const center = selectedPoint.geometry.coordinates
       if (!isFiniteLngLat(center)) {
-        setMapError('Unable to focus selected session due to invalid coordinates')
+        deferMapError('Unable to focus selected session due to invalid coordinates')
         return
       }
       try {
@@ -1044,7 +1065,7 @@ export function OperatorMap({
           zoom: Math.max(map.getZoom(), 14.8),
         })
       } catch {
-        setMapError('Unable to focus selected session')
+        deferMapError('Unable to focus selected session')
       }
       return
     }
@@ -1058,7 +1079,7 @@ export function OperatorMap({
       hasValidCoordinate = true
     }
     if (!hasValidCoordinate) {
-      setMapError('Unable to focus selected sessions due to invalid coordinates')
+      deferMapError('Unable to focus selected sessions due to invalid coordinates')
       return
     }
     try {
@@ -1068,18 +1089,11 @@ export function OperatorMap({
         maxZoom: 14.8,
       })
     } catch {
-      setMapError('Unable to focus selected sessions')
+      deferMapError('Unable to focus selected sessions')
     }
   }, [mapReady, selectedSessionIds, selectedPeriodAPoints, compact])
 
-  const kpiLabel =
-    activeTab === 'failure'
-      ? 'Setup / access failures'
-      : activeTab === 'callDrop'
-        ? 'Call drops'
-        : activeTab === 'payload'
-          ? 'Payload throughput'
-          : 'Handover success'
+  const kpiLabel = kpiDefinition(selectedKpiId).label
   return (
     <div className={`map-shell ${compact ? 'map-shell--embed' : ''}`}>
       <div className={`map-toolbar ${compact ? 'map-toolbar--embed' : ''}`}>

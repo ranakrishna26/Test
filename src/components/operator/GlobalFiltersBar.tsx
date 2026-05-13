@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { SavedFilterPreset } from '../../utils/filterPresets'
+import { groupedKpiDefinitions, type KpiId } from '../../data/kpis'
 
 type Props = {
   timeRange: string
@@ -8,14 +9,14 @@ type Props = {
   onCustomTimeRangeStart: (v: string) => void
   customTimeRangeEnd: string
   onCustomTimeRangeEnd: (v: string) => void
-  technology: string
-  onTechnology: (v: string) => void
   service: string
   onService: (v: string) => void
   subscriberType: string
   onSubscriberType: (v: string) => void
   networkMode: 'all' | 'sa' | 'nsa'
   onNetworkMode: (v: 'all' | 'sa' | 'nsa') => void
+  selectedKpiId: KpiId
+  onSelectedKpiId: (v: KpiId) => void
   presets: SavedFilterPreset[]
   onApplyPreset: (id: string | null) => void
   onSavePreset: (name: string) => void
@@ -29,14 +30,14 @@ export function GlobalFiltersBar({
   onCustomTimeRangeStart,
   customTimeRangeEnd,
   onCustomTimeRangeEnd,
-  technology,
-  onTechnology,
   service,
   onService,
   subscriberType,
   onSubscriberType,
   networkMode,
   onNetworkMode,
+  selectedKpiId,
+  onSelectedKpiId,
   presets,
   onApplyPreset,
   onSavePreset,
@@ -44,12 +45,39 @@ export function GlobalFiltersBar({
 }: Props) {
   const [presetSelection, setPresetSelection] = useState('')
   const [saveName, setSaveName] = useState('')
+  const kpiGroups = groupedKpiDefinitions()
+  const saActive = networkMode !== 'nsa'
+  const nsaActive = networkMode !== 'sa'
+
+  function toggleSaMode() {
+    if (saActive && nsaActive) {
+      onNetworkMode('nsa')
+      return
+    }
+    if (!saActive && nsaActive) {
+      onNetworkMode('all')
+      return
+    }
+    onNetworkMode('sa')
+  }
+
+  function toggleNsaMode() {
+    if (saActive && nsaActive) {
+      onNetworkMode('sa')
+      return
+    }
+    if (saActive && !nsaActive) {
+      onNetworkMode('all')
+      return
+    }
+    onNetworkMode('nsa')
+  }
 
   return (
     <header className="filters-bar">
       <div className="filters-row">
         <div className="filters-primary">
-          <label className="filter-item">
+          <label className="filter-item filter-kpi">
             <span>Time range</span>
             <select value={timeRange} onChange={(e) => onTimeRange(e.target.value)}>
               <option value="15m">Last 15 minutes</option>
@@ -87,22 +115,18 @@ export function GlobalFiltersBar({
             <div className="mode-toggle-buttons">
               <button
                 type="button"
-                className={`mode-toggle-btn ${
-                  networkMode === 'all' || networkMode === 'sa' ? 'is-selected' : ''
-                }`}
-                onClick={() => onNetworkMode(networkMode === 'sa' ? 'all' : 'sa')}
-                aria-pressed={networkMode === 'sa'}
+                className={`mode-toggle-btn ${saActive ? 'is-selected' : ''}`}
+                onClick={toggleSaMode}
+                aria-pressed={saActive}
                 title="Filter for 5G SA subscribers"
               >
                 5G SA
               </button>
               <button
                 type="button"
-                className={`mode-toggle-btn ${
-                  networkMode === 'all' || networkMode === 'nsa' ? 'is-selected' : ''
-                }`}
-                onClick={() => onNetworkMode(networkMode === 'nsa' ? 'all' : 'nsa')}
-                aria-pressed={networkMode === 'nsa'}
+                className={`mode-toggle-btn ${nsaActive ? 'is-selected' : ''}`}
+                onClick={toggleNsaMode}
+                aria-pressed={nsaActive}
                 title="Filter for 5G NSA subscribers"
               >
                 5G NSA
@@ -110,11 +134,21 @@ export function GlobalFiltersBar({
             </div>
           </div>
           <label className="filter-item">
-            <span>Technology</span>
-            <select value={technology} onChange={(e) => onTechnology(e.target.value)}>
-              <option value="all">All</option>
-              <option value="5g">5G</option>
-              <option value="4g">4G</option>
+            <span>Global KPI</span>
+            <select
+              value={selectedKpiId}
+              onChange={(e) => onSelectedKpiId(e.target.value as KpiId)}
+              aria-label="Global KPI filter"
+            >
+              {kpiGroups.map((group) => (
+                <optgroup key={group.category} label={group.category}>
+                  {group.kpis.map((kpi) => (
+                    <option key={kpi.id} value={kpi.id}>
+                      {kpi.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
             </select>
           </label>
           <label className="filter-item">

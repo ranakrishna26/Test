@@ -2,9 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react'
 import {
   Area,
   Bar,
-  BarChart,
   CartesianGrid,
-  Cell,
   ComposedChart,
   Line,
   ReferenceDot,
@@ -19,24 +17,24 @@ import {
 } from 'recharts'
 import {
   SUBSCRIBERS,
-  aggregateKpiFromSessions,
   applyGlobalSubscriberFilters,
   cellById,
+  cellKpiValue,
   cellTableCallDropMetrics,
   cellTableFailureMetrics,
   cellTableHoPctMetrics,
   cellTablePayloadDlMetrics,
   cellTablePayloadUlMetrics,
   comparePeriodBLabel,
-  comparisonKpiFromTab,
-  computePeriodBKpiValue,
+  computePeriodBKpiValueByKpi,
+  formatKpiValue,
   getSessions,
   globalTimeRangeLabel,
-  headlineMetric,
-  rankedCells,
-  sortSubscribersByTab,
+  rankedCellsByKpi,
+  sessionKpiValue,
+  sortSubscribersByKpi,
+  subscriberKpiValue,
   subscribersForFootprint,
-  tabHeadlineLabel,
   type ComparePeriodOption,
   type Cell as NetworkCell,
   type Subscriber as NetworkSubscriber,
@@ -46,12 +44,20 @@ import {
 import { GlobalFiltersBar } from './GlobalFiltersBar'
 import { OperatorMap } from './OperatorMap'
 import {
+  DEFAULT_GLOBAL_FILTER_SNAPSHOT,
   loadFilterPresets,
   newPresetId,
   persistFilterPresets,
   type GlobalFilterSnapshot,
   type SavedFilterPreset,
 } from '../../utils/filterPresets'
+import {
+  KPI_BY_ID,
+  kpiDistributionBins,
+  type KpiDistributionBin,
+  tabDefaultKpi,
+  type KpiId,
+} from '../../data/kpis'
 
 type View = 'cells' | 'subscribers' | 'sessions'
 
@@ -61,6 +67,108 @@ const TABS: { id: TableTab; label: string }[] = [
   { id: 'payload', label: 'Payload' },
   { id: 'handover', label: 'Handover' },
 ]
+
+const CELL_FOCUS_TREND_BUCKETS = 48
+const CELL_FOCUS_SCATTER_MAX_POINTS = 320
+const CELL_FOCUS_COMPARISON_MAX_SESSIONS = 2500
+
+type SessionPoint = ReturnType<typeof getSessions>[number]
+type TrendDatum = {
+  i: number
+  tp: number
+  id: string | null
+  cellId: string | null
+  cellName: string | null
+  peerBackdrop: number | null
+  peerAvg: number | null
+  peerLow: number | null
+  peerHigh: number | null
+  peerCount: number
+  bucketSize: number
+  bucketCellCount: number
+  p10: number
+  p90: number
+  low: number
+  high: number
+  isAggregated: boolean
+}
+
+function deterministicSample<T>(items: T[], maxItems: number): T[] {
+  if (items.length <= maxItems || maxItems <= 0) return items
+  if (maxItems === 1) return [items[0]]
+  const result: T[] = []
+  for (let i = 0; i < maxItems; i += 1) {
+    const idx = Math.floor((i * (items.length - 1)) / (maxItems - 1))
+    result.push(items[idx])
+  }
+  return result
+}
+
+function percentileFromSorted(values: number[], percentile: number): number {
+  if (!values.length) return 0
+  const clamped = Math.min(Math.max(percentile, 0), 1)
+  const idx = Math.floor(clamped * (values.length - 1))
+  return values[idx]
+}
+
+function distributionBinIndex(value: number, bins: KpiDistributionBin[]): number {
+  for (let i = 0; i < bins.length; i += 1) {
+    const bin = bins[i]
+    if (value >= bin.min && value < bin.max) return i
+  }
+  return Math.max(0, bins.length - 1)
+}
+
+function distributionStats(values: number[], bins: KpiDistributionBin[]) {
+  const counts = new Array(bins.length).fill(0)
+  for (const value of values) {
+    const idx = distributionBinIndex(value, bins)
+    counts[idx] += 1
+  }
+  const total = values.length
+  let cumulativePct = 0
+  return bins.map((_, idx) => {
+    const count = counts[idx]
+    const pct = total > 0 ? (count / total) * 100 : 0
+    cumulativePct = Math.min(100, cumulativePct + pct)
+    return { count, pct, cdfPct: cumulativePct }
+  })
+}
+
+function bucketSessionsForTrend(sessions: SessionPoint[], targetBuckets: number) {
+  if (!sessions.length) return []
+  const bucketCount = Math.max(1, Math.min(targetBuckets, sessions.length))
+  const buckets: {
+    i: number
+    avgThroughput: number
+    p10Throughput: number
+    p90Throughput: number
+    lowThroughput: number
+    highThroughput: number
+    bucketSize: number
+    cellCount: number
+  }[] = []
+  for (let bucketIdx = 0; bucketIdx < bucketCount; bucketIdx += 1) {
+    const start = Math.floor((bucketIdx * sessions.length) / bucketCount)
+    const end = Math.floor(((bucketIdx + 1) * sessions.length) / bucketCount)
+    const slice = sessions.slice(start, end)
+    if (!slice.length) continue
+    const throughput = slice.map((session) => session.throughputMbps)
+    const sorted = [...throughput].sort((a, b) => a - b)
+    const total = throughput.reduce((sum, value) => sum + value, 0)
+    buckets.push({
+      i: buckets.length,
+      avgThroughput: total / throughput.length,
+      p10Throughput: percentileFromSorted(sorted, 0.1),
+      p90Throughput: percentileFromSorted(sorted, 0.9),
+      lowThroughput: sorted[0],
+      highThroughput: sorted[sorted.length - 1],
+      bucketSize: slice.length,
+      cellCount: new Set(slice.map((session) => session.cellId)).size,
+    })
+  }
+  return buckets
+}
 
 function matchImsi(q: string, imsi: string): boolean {
   const n = q.replace(/\s/g, '').toLowerCase()
@@ -138,7 +246,7 @@ function heatmapData(sessions: ReturnType<typeof getSessions>) {
 }
 
 function cellDetailColSpan(tab: TableTab): number {
-  return tab === 'payload' || tab === 'handover' ? 5 : 4
+  return tab === 'payload' || tab === 'handover' ? 6 : 5
 }
 
 function CellDetailsPanel({ cell }: { cell: NetworkCell }) {
@@ -294,10 +402,12 @@ export function OperatorDashboard() {
   const [timeRange, setTimeRange] = useState('24h')
   const [customTimeRangeStart, setCustomTimeRangeStart] = useState('')
   const [customTimeRangeEnd, setCustomTimeRangeEnd] = useState('')
-  const [technology, setTechnology] = useState('all')
   const [service, setService] = useState('all')
-  const [networkMode, setNetworkMode] = useState<'all' | 'sa' | 'nsa'>('all')
+  const [networkMode, setNetworkMode] = useState<'all' | 'sa' | 'nsa'>(
+    DEFAULT_GLOBAL_FILTER_SNAPSHOT.networkMode,
+  )
   const [subscriberType, setSubscriberType] = useState('all')
+  const [selectedKpiId, setSelectedKpiId] = useState<KpiId>(DEFAULT_GLOBAL_FILTER_SNAPSHOT.selectedKpiId)
   const [cellAttributes, setCellAttributes] = useState('')
 
   const [filterPresets, setFilterPresets] = useState<SavedFilterPreset[]>(() =>
@@ -323,13 +433,13 @@ export function OperatorDashboard() {
   const [comparePeriodB, setComparePeriodB] = useState<ComparePeriodOption>('7d')
   const [customRangeStart, setCustomRangeStart] = useState('')
   const [customRangeEnd, setCustomRangeEnd] = useState('')
+  const [showComparisonCdf, setShowComparisonCdf] = useState(false)
 
   const subscriberGlobalFilters: SubscriberGlobalFilters = useMemo(
     () => ({
       timeRange,
       customTimeRangeStart,
       customTimeRangeEnd,
-      technology,
       service,
       networkMode,
       subscriberType,
@@ -338,7 +448,6 @@ export function OperatorDashboard() {
       timeRange,
       customTimeRangeStart,
       customTimeRangeEnd,
-      technology,
       service,
       networkMode,
       subscriberType,
@@ -346,8 +455,8 @@ export function OperatorDashboard() {
   )
 
   const ranked = useMemo(
-    () => rankedCells(activeTab, subscriberGlobalFilters),
-    [activeTab, subscriberGlobalFilters],
+    () => rankedCellsByKpi(selectedKpiId, subscriberGlobalFilters),
+    [selectedKpiId, subscriberGlobalFilters],
   )
 
   const visibleRanked = useMemo(() => {
@@ -358,14 +467,18 @@ export function OperatorDashboard() {
     )
   }, [ranked, cellAttributes])
 
-  const subscriberRows = useMemo(() => {
+  const footprintSubscribers = useMemo(() => {
     if (!selectedCellId) return []
     const base = subscribersForFootprint(selectedCellId)
-    let rows = applyGlobalSubscriberFilters(base, subscriberGlobalFilters)
+    return applyGlobalSubscriberFilters(base, subscriberGlobalFilters)
+  }, [selectedCellId, subscriberGlobalFilters])
+
+  const subscriberRows = useMemo(() => {
+    let rows = footprintSubscribers
     if (tableImsiSearch.trim())
       rows = rows.filter((s) => matchImsi(tableImsiSearch, s.imsi))
-    return sortSubscribersByTab(rows, activeTab)
-  }, [selectedCellId, activeTab, tableImsiSearch, subscriberGlobalFilters])
+    return sortSubscribersByKpi(rows, selectedKpiId)
+  }, [footprintSubscribers, selectedKpiId, tableImsiSearch])
 
   const imsiQuickMatches = useMemo(() => {
     const q = tableImsiSearch.trim()
@@ -383,9 +496,23 @@ export function OperatorDashboard() {
     return allSessionsForSubscriber.filter((s) => s.cellId === sessionCellFilter)
   }, [allSessionsForSubscriber, sessionCellFilter])
 
+  const cellFocusSessions = useMemo(() => {
+    if (view !== 'subscribers' || !selectedCellId) return []
+    return footprintSubscribers.flatMap((subscriber) => getSessions(subscriber.imsi))
+  }, [view, selectedCellId, footprintSubscribers])
+
+  const isSubscriberSessionView = view === 'sessions' && !!selectedImsi
+  const isCellFocusView = view === 'subscribers' && !!selectedCellId
+
+  const analyticsSessions = useMemo(() => {
+    if (isSubscriberSessionView) return sessions
+    if (isCellFocusView) return cellFocusSessions
+    return []
+  }, [isSubscriberSessionView, isCellFocusView, sessions, cellFocusSessions])
+
   const peerTrendByIndex = useMemo(() => {
-    const bucketCount = sessions.length
-    if (!selectedImsi || bucketCount === 0) {
+    const bucketCount = analyticsSessions.length
+    if (!isSubscriberSessionView || !selectedImsi || bucketCount === 0) {
       return new Map<number, { avg: number; min: number; max: number; count: number }>()
     }
     const peerRows = applyGlobalSubscriberFilters(
@@ -435,40 +562,90 @@ export function OperatorDashboard() {
       })
     })
     return result
-  }, [selectedImsi, sessionCellFilter, sessions.length, subscriberGlobalFilters])
+  }, [
+    analyticsSessions.length,
+    isSubscriberSessionView,
+    selectedImsi,
+    sessionCellFilter,
+    subscriberGlobalFilters,
+  ])
 
-  const trendData = useMemo(
+  const trendData = useMemo<TrendDatum[]>(() => {
+    if (isCellFocusView) {
+      return bucketSessionsForTrend(analyticsSessions, CELL_FOCUS_TREND_BUCKETS).map((bucket) => ({
+        i: bucket.i,
+        tp: bucket.avgThroughput,
+        id: null,
+        cellId: null,
+        cellName: null,
+        peerBackdrop: null,
+        peerAvg: null,
+        peerLow: null,
+        peerHigh: null,
+        peerCount: 0,
+        bucketSize: bucket.bucketSize,
+        bucketCellCount: bucket.cellCount,
+        p10: bucket.p10Throughput,
+        p90: bucket.p90Throughput,
+        low: bucket.lowThroughput,
+        high: bucket.highThroughput,
+        isAggregated: true,
+      }))
+    }
+    return analyticsSessions.map((s, i) => {
+      const peer = peerTrendByIndex.get(i)
+      return {
+        i,
+        tp: s.throughputMbps,
+        id: s.id,
+        cellId: s.cellId,
+        cellName: s.cellName,
+        peerBackdrop: peer?.avg ?? null,
+        peerAvg: peer?.avg ?? null,
+        peerLow: peer?.min ?? null,
+        peerHigh: peer?.max ?? null,
+        peerCount: peer?.count ?? 0,
+        bucketSize: 1,
+        bucketCellCount: 1,
+        p10: s.throughputMbps,
+        p90: s.throughputMbps,
+        low: s.throughputMbps,
+        high: s.throughputMbps,
+        isAggregated: false,
+      }
+    })
+  }, [analyticsSessions, isCellFocusView, peerTrendByIndex])
+  const scatterSourceSessions = useMemo(
     () =>
-      sessions.map((s, i) => {
-        const peer = peerTrendByIndex.get(i)
-        return {
-          i,
-          tp: s.throughputMbps,
-          id: s.id,
-          cellId: s.cellId,
-          cellName: s.cellName,
-          peerBackdrop: peer?.avg ?? null,
-          peerAvg: peer?.avg ?? null,
-          peerLow: peer?.min ?? null,
-          peerHigh: peer?.max ?? null,
-          peerCount: peer?.count ?? 0,
-        }
-      }),
-    [sessions, peerTrendByIndex],
+      isCellFocusView
+        ? deterministicSample(analyticsSessions, CELL_FOCUS_SCATTER_MAX_POINTS)
+        : analyticsSessions,
+    [analyticsSessions, isCellFocusView],
   )
   const scatterData = useMemo(
-    () => sessions.map((s) => ({ x: s.signalQuality, y: s.throughputMbps, id: s.id })),
-    [sessions],
+    () => scatterSourceSessions.map((s) => ({ x: s.signalQuality, y: s.throughputMbps, id: s.id })),
+    [scatterSourceSessions],
   )
-  const heatmap = useMemo(() => heatmapData(sessions), [sessions])
-  const selectedSessionIdSet = useMemo(() => new Set(selectedSessionIds), [selectedSessionIds])
+  const heatmap = useMemo(() => heatmapData(analyticsSessions), [analyticsSessions])
+  const analyticsSessionIdSet = useMemo(
+    () => new Set(analyticsSessions.map((session) => session.id)),
+    [analyticsSessions],
+  )
+  const visibleSelectedSessionIds = useMemo(
+    () => selectedSessionIds.filter((id) => analyticsSessionIdSet.has(id)),
+    [selectedSessionIds, analyticsSessionIdSet],
+  )
+  const selectedSessionIdSet = useMemo(
+    () => new Set(visibleSelectedSessionIds),
+    [visibleSelectedSessionIds],
+  )
   const selectedSessions = useMemo(
-    () => sessions.filter((s) => selectedSessionIdSet.has(s.id)),
-    [sessions, selectedSessionIdSet],
+    () => analyticsSessions.filter((s) => selectedSessionIdSet.has(s.id)),
+    [analyticsSessions, selectedSessionIdSet],
   )
   const selectedTrendPoints = useMemo(
-    () => trendData.filter((d) => selectedSessionIdSet.has(d.id)),
-    [trendData, selectedSessionIdSet],
+    () => (isCellFocusView ? [] : trendData.filter((d) => d.id && selectedSessionIdSet.has(d.id))),
+    [isCellFocusView, trendData, selectedSessionIdSet],
   )
   const trendSessionBands = useMemo(
     () => {
@@ -487,68 +664,78 @@ export function OperatorDashboard() {
     [trendData],
   )
   const selectedScatterPoints = useMemo(
-    () => scatterData.filter((d) => selectedSessionIdSet.has(d.id)),
-    [scatterData, selectedSessionIdSet],
+    () => (isCellFocusView ? [] : scatterData.filter((d) => selectedSessionIdSet.has(d.id))),
+    [isCellFocusView, scatterData, selectedSessionIdSet],
   )
   const selectedHeatmapIndexes = useMemo(() => {
-    if (!selectedSessionIds.length || !heatmap.cells.length) return new Set<number>()
+    if (!selectedSessionIdSet.size || !heatmap.cells.length) return new Set<number>()
     const indexes = new Set<number>()
-    sessions.forEach((s, idx) => {
+    analyticsSessions.forEach((s, idx) => {
       if (selectedSessionIdSet.has(s.id)) indexes.add(idx % heatmap.cells.length)
     })
     return indexes
-  }, [sessions, selectedSessionIds.length, selectedSessionIdSet, heatmap.cells.length])
+  }, [analyticsSessions, selectedSessionIdSet, heatmap.cells.length])
 
-  useEffect(() => {
-    const validIds = new Set(sessions.map((s) => s.id))
-    setSelectedSessionIds((prev) => prev.filter((id) => validIds.has(id)))
-    setSessionSelectionAnchorId((prev) => (prev && validIds.has(prev) ? prev : null))
-  }, [sessions])
+  const comparisonSourceSessions = useMemo(
+    () =>
+      isCellFocusView
+        ? deterministicSample(analyticsSessions, CELL_FOCUS_COMPARISON_MAX_SESSIONS)
+        : analyticsSessions,
+    [analyticsSessions, isCellFocusView],
+  )
 
-  const comparisonBarData = useMemo(() => {
-    if (!sessions.length) return []
-    const meta = comparisonKpiFromTab(activeTab)
-    const valueA = aggregateKpiFromSessions(sessions, activeTab)
-    const valueB = computePeriodBKpiValue(
-      valueA,
-      activeTab,
-      comparePeriodB,
-      customRangeStart,
-      customRangeEnd,
+  const comparisonDistributionData = useMemo(() => {
+    if (!comparisonSourceSessions.length) return []
+    const bins = kpiDistributionBins(selectedKpiId)
+    const periodAValues = comparisonSourceSessions.map((session) =>
+      sessionKpiValue(session, selectedKpiId),
     )
-    return [
-      {
-        key: 'A',
-        name: 'Period A',
-        periodLabel:
-          timeRange === 'custom' && customTimeRangeStart && customTimeRangeEnd
-            ? `${customTimeRangeStart} → ${customTimeRangeEnd}`
-            : globalTimeRangeLabel(timeRange),
-        value: valueA,
-        meta,
-      },
-      {
-        key: 'B',
-        name: 'Period B',
-        periodLabel: comparePeriodBLabel(
-          comparePeriodB,
-          customRangeStart,
-          customRangeEnd,
-        ),
-        value: valueB,
-        meta,
-      },
-    ]
+    const periodBValues = periodAValues.map((value) =>
+      computePeriodBKpiValueByKpi(value, selectedKpiId, comparePeriodB, customRangeStart, customRangeEnd),
+    )
+    const periodAStats = distributionStats(periodAValues, bins)
+    const periodBStats = distributionStats(periodBValues, bins)
+    return bins.map((bin, idx) => ({
+      binLabel: bin.label,
+      periodAPct: periodAStats[idx].pct,
+      periodBPct: periodBStats[idx].pct,
+      periodACdfPct: periodAStats[idx].cdfPct,
+      periodBCdfPct: periodBStats[idx].cdfPct,
+      periodACount: periodAStats[idx].count,
+      periodBCount: periodBStats[idx].count,
+    }))
   }, [
-    sessions,
-    activeTab,
-    timeRange,
-    customTimeRangeStart,
-    customTimeRangeEnd,
+    comparisonSourceSessions,
+    selectedKpiId,
     comparePeriodB,
     customRangeStart,
     customRangeEnd,
   ])
+
+  const comparisonPeriodALabel =
+    timeRange === 'custom' && customTimeRangeStart && customTimeRangeEnd
+      ? `${customTimeRangeStart} → ${customTimeRangeEnd}`
+      : globalTimeRangeLabel(timeRange)
+
+  const comparisonPeriodBWindowLabel = comparePeriodBLabel(
+    comparePeriodB,
+    customRangeStart,
+    customRangeEnd,
+  )
+
+  const comparisonWasSampled =
+    isCellFocusView && comparisonSourceSessions.length < analyticsSessions.length
+
+  const comparisonHintText = isSubscriberSessionView
+    ? 'Period A and B are derived from the selected subscriber session dataset.'
+    : isCellFocusView
+      ? 'Period A and B are derived from the selected cell footprint cohort session dataset.'
+      : 'Period A and B are derived from the scoped session dataset.'
+
+  const comparisonTotalSessions = comparisonSourceSessions.length
+  const comparisonScopeTooltip = comparisonWasSampled
+    ? `Cell view sampled ${comparisonTotalSessions} of ${analyticsSessions.length} sessions for comparison performance.`
+    : `${comparisonTotalSessions} sessions in comparison scope.`
 
   function handleMapCellSelect(cellId: string) {
     if (view === 'sessions' && selectedImsi) {
@@ -615,6 +802,11 @@ export function OperatorDashboard() {
     setView('sessions')
   }
 
+  function handleTabSelect(tabId: TableTab) {
+    setActiveTab(tabId)
+    setSelectedKpiId(tabDefaultKpi(tabId))
+  }
+
   function selectSingleSession(sessionId: string) {
     setSelectedSessionIds([sessionId])
     setSessionSelectionAnchorId(sessionId)
@@ -677,17 +869,20 @@ export function OperatorDashboard() {
       : view === 'subscribers' && selectedCellId
         ? 'cellFocus'
         : 'all'
+  const selectedCell = selectedCellId ? cellById(selectedCellId) : undefined
+  const showAnalytics = isSubscriberSessionView || isCellFocusView
+  const selectedKpiMeta = KPI_BY_ID[selectedKpiId]
 
   function snapshotGlobalFilters(): GlobalFilterSnapshot {
     return {
       timeRange,
       customTimeRangeStart,
       customTimeRangeEnd,
-      technology,
       service,
       networkMode,
       subscriberType,
       cellAttributes,
+      selectedKpiId,
     }
   }
 
@@ -699,11 +894,11 @@ export function OperatorDashboard() {
     setTimeRange(filters.timeRange)
     setCustomTimeRangeStart(filters.customTimeRangeStart)
     setCustomTimeRangeEnd(filters.customTimeRangeEnd)
-    setTechnology(filters.technology)
     setService(filters.service)
     setNetworkMode(filters.networkMode)
     setSubscriberType(filters.subscriberType)
     setCellAttributes(filters.cellAttributes)
+    setSelectedKpiId(filters.selectedKpiId ?? DEFAULT_GLOBAL_FILTER_SNAPSHOT.selectedKpiId)
   }
 
   function handleSavePreset(name: string) {
@@ -740,14 +935,14 @@ export function OperatorDashboard() {
         onCustomTimeRangeStart={setCustomTimeRangeStart}
         customTimeRangeEnd={customTimeRangeEnd}
         onCustomTimeRangeEnd={setCustomTimeRangeEnd}
-        technology={technology}
-        onTechnology={setTechnology}
         service={service}
         onService={setService}
         subscriberType={subscriberType}
         onSubscriberType={setSubscriberType}
         networkMode={networkMode}
         onNetworkMode={setNetworkMode}
+        selectedKpiId={selectedKpiId}
+        onSelectedKpiId={setSelectedKpiId}
         presets={filterPresets}
         onApplyPreset={handleApplyPreset}
         onSavePreset={handleSavePreset}
@@ -801,20 +996,21 @@ export function OperatorDashboard() {
               </div>
             )}
 
+            <div className="tabs">
+              {TABS.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  className={`tab ${activeTab === t.id ? 'active' : ''}`}
+                  onClick={() => handleTabSelect(t.id)}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
             {view === 'cells' && (
               <>
-                <div className="tabs">
-                  {TABS.map((t) => (
-                    <button
-                      key={t.id}
-                      type="button"
-                      className={`tab ${activeTab === t.id ? 'active' : ''}`}
-                      onClick={() => setActiveTab(t.id)}
-                    >
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
                 <p className="context-line table-footprint-hint">{cellTableFootprintHint(activeTab)}</p>
                 <div className="table-scroll">
                   {activeTab === 'failure' && (
@@ -825,6 +1021,7 @@ export function OperatorDashboard() {
                           <th>Cell name</th>
                           <th>Cell ID</th>
                           <th>With issue / in cohort</th>
+                          <th>{selectedKpiMeta.label}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -862,6 +1059,7 @@ export function OperatorDashboard() {
                                     issueDescriptor="setup/access failures"
                                   />
                                 </td>
+                                <td>{formatKpiValue(selectedKpiId, cellKpiValue(c, subscriberGlobalFilters, selectedKpiId))}</td>
                               </tr>
                               {isExpanded && (
                                 <tr className="cell-details-row" key={`${c.id}-detail`}>
@@ -884,6 +1082,7 @@ export function OperatorDashboard() {
                           <th>Cell name</th>
                           <th>Cell ID</th>
                           <th>With issue / in cohort</th>
+                          <th>{selectedKpiMeta.label}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -921,6 +1120,7 @@ export function OperatorDashboard() {
                                     issueDescriptor="call drops"
                                   />
                                 </td>
+                                <td>{formatKpiValue(selectedKpiId, cellKpiValue(c, subscriberGlobalFilters, selectedKpiId))}</td>
                               </tr>
                               {isExpanded && (
                                 <tr className="cell-details-row" key={`${c.id}-detail`}>
@@ -944,6 +1144,7 @@ export function OperatorDashboard() {
                           <th>Cell ID</th>
                           <th>DL: with issue / in cohort</th>
                           <th>UL: with issue / in cohort</th>
+                          <th>{selectedKpiMeta.label}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -990,6 +1191,7 @@ export function OperatorDashboard() {
                                     ranTooltip={`No subscribers in this footprint for drill-down. RAN UL: ${c.ulMbps} Mbps`}
                                   />
                                 </td>
+                                <td>{formatKpiValue(selectedKpiId, cellKpiValue(c, subscriberGlobalFilters, selectedKpiId))}</td>
                               </tr>
                               {isExpanded && (
                                 <tr className="cell-details-row" key={`${c.id}-detail`}>
@@ -1013,6 +1215,7 @@ export function OperatorDashboard() {
                           <th>Cell ID</th>
                           <th>Total handovers</th>
                           <th>With issue / in cohort</th>
+                          <th>{selectedKpiMeta.label}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1050,6 +1253,7 @@ export function OperatorDashboard() {
                                     ranTooltip={`No subscribers in this footprint for drill-down. RAN HO: ${c.hoSuccessPct.toFixed(1)}%`}
                                   />
                                 </td>
+                                <td>{formatKpiValue(selectedKpiId, cellKpiValue(c, subscriberGlobalFilters, selectedKpiId))}</td>
                               </tr>
                               {isExpanded && (
                                 <tr className="cell-details-row" key={`${c.id}-detail`}>
@@ -1072,7 +1276,7 @@ export function OperatorDashboard() {
               <>
                 <p className="context-line">
                   Footprint subscribers (this cell and neighbours), worst first —{' '}
-                  {tabHeadlineLabel(activeTab)}. Use the map to switch cell; scope matches the
+                  {selectedKpiMeta.label}. Use the map to switch cell; scope matches the
                   footprint.
                 </p>
                 <div className="table-scroll">
@@ -1083,7 +1287,7 @@ export function OperatorDashboard() {
                         <th>Subscriber</th>
                         <th>Cell</th>
                         <th>Sessions</th>
-                        <th>{tabHeadlineLabel(activeTab)}</th>
+                        <th>{selectedKpiMeta.label}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1109,7 +1313,7 @@ export function OperatorDashboard() {
                               <td className="mono">{s.imsi}</td>
                               <td>{s.cellName}</td>
                               <td>{s.sessions}</td>
-                              <td>{headlineMetric(s, activeTab)}</td>
+                              <td>{formatKpiValue(selectedKpiId, subscriberKpiValue(s, selectedKpiId))}</td>
                             </tr>
                             {isExpanded && (
                               <tr className="subscriber-details-row">
@@ -1149,6 +1353,7 @@ export function OperatorDashboard() {
                         <th>Signal quality</th>
                         <th>Throughput</th>
                         <th>Connectivity</th>
+                        <th>{selectedKpiMeta.label}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1174,6 +1379,7 @@ export function OperatorDashboard() {
                           <td>{s.signalQuality.toFixed(2)}</td>
                           <td>{s.throughputMbps} Mbps</td>
                           <td>{s.connectivity}</td>
+                          <td>{formatKpiValue(selectedKpiId, sessionKpiValue(s, selectedKpiId))}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1185,7 +1391,7 @@ export function OperatorDashboard() {
         </section>
 
         <section
-          className={`pane detail-pane${view === 'sessions' ? ' detail-pane--sessions' : ''}`}
+          className={`pane detail-pane${showAnalytics ? ' detail-pane--sessions' : ''}`}
         >
           <div className="detail-stack">
             <div className="detail-map-slot">
@@ -1193,24 +1399,37 @@ export function OperatorDashboard() {
                 mode={mapMode}
                 selectedCellId={selectedCellId}
                 subscriberImsi={selectedImsi}
-                activeTab={activeTab}
+                selectedKpiId={selectedKpiId}
                 sessions={sessions}
-                selectedSessionIds={selectedSessionIds}
+                selectedSessionIds={visibleSelectedSessionIds}
                 onSessionSelect={selectSingleSession}
                 sessionTableCellFilter={sessionCellFilter}
                 showHoverKpis={view === 'sessions'}
-                embed={view === 'sessions' ? 'compact' : 'full'}
+                embed={showAnalytics ? 'compact' : 'full'}
                 subscriberGlobalFilters={subscriberGlobalFilters}
                 onCellSelect={handleMapCellSelect}
                 onMapBackgroundClick={handleMapBackgroundClick}
               />
             </div>
 
-            {view === 'sessions' && selectedImsi && (
+            {showAnalytics && (
               <div className="session-analytics-scroll">
                 <div className="charts-block">
-                  <h3 className="block-title">Session charts</h3>
-                  {selectedSessions.length === 1 ? (
+                  <h3 className="block-title">
+                    {isCellFocusView ? 'Cell footprint charts' : 'Session charts'}
+                  </h3>
+                  {isCellFocusView ? (
+                    <p className="session-selection-chip" role="status">
+                      Cell footprint cohort for{' '}
+                      <strong>{selectedCell?.name ?? selectedCellId ?? 'selected cell'}</strong>:&nbsp;
+                      <strong>{footprintSubscribers.length}</strong> subscribers,&nbsp;
+                      <strong>{analyticsSessions.length}</strong> sessions after global filters.
+                      {'  '}Charts are optimized as aggregated cohort analytics (
+                      {Math.min(CELL_FOCUS_TREND_BUCKETS, analyticsSessions.length)} trend buckets,
+                      scatter sampled to {scatterData.length} points max {CELL_FOCUS_SCATTER_MAX_POINTS}
+                      ).
+                    </p>
+                  ) : selectedSessions.length === 1 ? (
                     <p className="session-selection-chip" role="status">
                       Selected session: <strong>{selectedSessions[0].id}</strong> on{' '}
                       {selectedSessions[0].cellName} ({selectedSessions[0].cellId}) - signal{' '}
@@ -1238,9 +1457,19 @@ export function OperatorDashboard() {
                       Select a session row or map pixel to highlight it across charts.
                     </p>
                   )}
+                  {isCellFocusView && visibleSelectedSessionIds.length > 0 && (
+                    <p className="session-selection-chip" role="status">
+                      Per-session highlight overlays are disabled in aggregated cohort mode to keep
+                      chart rendering responsive.
+                    </p>
+                  )}
                   <div className="chart-grid">
                     <figure className="chart-fig">
-                      <figcaption>Trend · throughput by session order</figcaption>
+                      <figcaption>
+                        {isCellFocusView
+                          ? 'Trend · bucketed throughput (cell-footprint cohort)'
+                          : 'Trend · throughput by session order'}
+                      </figcaption>
                       <ResponsiveContainer
                         width="100%"
                         height={220}
@@ -1277,6 +1506,22 @@ export function OperatorDashboard() {
                             content={({ active, payload }) => {
                               if (!active || !payload?.[0]) return null
                               const d = payload[0].payload as (typeof trendData)[number]
+                              if (d.isAggregated) {
+                                return (
+                                  <div className="chart-tooltip">
+                                    <div className="chart-tooltip-title">Bucket {d.i + 1}</div>
+                                    <div className="chart-tooltip-sub">
+                                      {d.bucketSize} sessions across {d.bucketCellCount} cells
+                                    </div>
+                                    <div className="chart-tooltip-kpi">
+                                      Avg throughput: <strong>{d.tp.toFixed(1)} Mbps</strong>
+                                    </div>
+                                    <div className="chart-tooltip-kpi">
+                                      P10-P90: {d.p10.toFixed(1)}-{d.p90.toFixed(1)} Mbps
+                                    </div>
+                                  </div>
+                                )
+                              }
                               return (
                                 <div className="chart-tooltip">
                                   <div className="chart-tooltip-title">Session {d.i + 1}</div>
@@ -1284,40 +1529,52 @@ export function OperatorDashboard() {
                                     {d.id} · {d.cellName} ({d.cellId})
                                   </div>
                                   <div className="chart-tooltip-kpi">
-                                    Selected subscriber: <strong>{d.tp.toFixed(1)} Mbps</strong>
+                                    {isCellFocusView ? 'Cell footprint' : 'Selected subscriber'}:{' '}
+                                    <strong>{d.tp.toFixed(1)} Mbps</strong>
                                   </div>
-                                  {d.peerAvg !== null && d.peerLow !== null && d.peerHigh !== null ? (
+                                  {!isCellFocusView &&
+                                  d.peerAvg !== null &&
+                                  d.peerLow !== null &&
+                                  d.peerHigh !== null ? (
                                     <div className="chart-tooltip-kpi">
                                       Peers ({d.peerCount}): {d.peerAvg.toFixed(1)} avg ·{' '}
                                       {d.peerLow.toFixed(1)}-{d.peerHigh.toFixed(1)} Mbps
                                     </div>
-                                  ) : (
+                                  ) : !isCellFocusView ? (
                                     <div className="chart-tooltip-kpi">Peers: no data</div>
+                                  ) : (
+                                    <div className="chart-tooltip-kpi">
+                                      Cohort sessions: {analyticsSessions.length}
+                                    </div>
                                   )}
                                 </div>
                               )
                             }}
                           />
-                          <Area
-                            type="monotone"
-                            dataKey="peerBackdrop"
-                            stroke="none"
-                            fill="#93c5fd"
-                            fillOpacity={0.22}
-                            isAnimationActive={false}
-                            connectNulls
-                          />
-                          <Line
-                            type="monotone"
-                            dataKey="peerAvg"
-                            stroke="#93c5fd"
-                            strokeWidth={1.5}
-                            dot={false}
-                            strokeDasharray="4 4"
-                            strokeOpacity={0.75}
-                            isAnimationActive={false}
-                            connectNulls
-                          />
+                          {!isCellFocusView && (
+                            <>
+                              <Area
+                                type="monotone"
+                                dataKey="peerBackdrop"
+                                stroke="none"
+                                fill="#93c5fd"
+                                fillOpacity={0.22}
+                                isAnimationActive={false}
+                                connectNulls
+                              />
+                              <Line
+                                type="monotone"
+                                dataKey="peerAvg"
+                                stroke="#93c5fd"
+                                strokeWidth={1.5}
+                                dot={false}
+                                strokeDasharray="4 4"
+                                strokeOpacity={0.75}
+                                isAnimationActive={false}
+                                connectNulls
+                              />
+                            </>
+                          )}
                           {selectedTrendPoints.map((point) => (
                             <Fragment key={point.id}>
                               <ReferenceArea
@@ -1349,7 +1606,11 @@ export function OperatorDashboard() {
                       </ResponsiveContainer>
                     </figure>
                     <figure className="chart-fig">
-                      <figcaption>Scatter · signal vs throughput</figcaption>
+                      <figcaption>
+                        {isCellFocusView
+                          ? 'Scatter · signal vs throughput (deterministic sample)'
+                          : 'Scatter · signal vs throughput'}
+                      </figcaption>
                       <ResponsiveContainer
                         width="100%"
                         height={220}
@@ -1379,7 +1640,11 @@ export function OperatorDashboard() {
                       </ResponsiveContainer>
                     </figure>
                     <figure className="chart-fig heatmap-fig">
-                      <figcaption>Heatmap · packet loss (placeholder grid)</figcaption>
+                      <figcaption>
+                        {isCellFocusView
+                          ? 'Heatmap · packet loss (cell-footprint placeholder grid)'
+                          : 'Heatmap · packet loss (placeholder grid)'}
+                      </figcaption>
                       <div
                         className="heatmap-grid"
                         style={{
@@ -1408,8 +1673,8 @@ export function OperatorDashboard() {
                   <h3 className="block-title">Time period comparison</h3>
                   <p className="compare-hint">
                     <strong>Period A</strong> uses the global time range. <strong>Period B</strong> is
-                    the comparison window. KPI matches the cell table tab you used (
-                    {comparisonKpiFromTab(activeTab).label}).
+                    the comparison window. KPI follows the selected global KPI ({selectedKpiMeta.label}
+                    ). {comparisonHintText}
                   </p>
                   <div className="compare-controls">
                     <label className="compare-select-label">
@@ -1448,62 +1713,158 @@ export function OperatorDashboard() {
                         </label>
                       </div>
                     )}
+                    <label className="compare-toggle">
+                      <input
+                        type="checkbox"
+                        checked={showComparisonCdf}
+                        onChange={(e) => setShowComparisonCdf(e.target.checked)}
+                      />
+                      <span>Show CDF overlay</span>
+                    </label>
                   </div>
                   <figure className="chart-fig compare-chart-fig">
-                    <figcaption>
-                      {comparisonKpiFromTab(activeTab).label}: Period A vs Period B
-                    </figcaption>
-                    {comparisonBarData.length > 0 ? (
+                    <div className="compare-chart-header">
+                      <figcaption>
+                        {selectedKpiMeta.label}: distribution bars (Period A vs Period B)
+                      </figcaption>
+                      <div className="compare-top-legend" aria-label="Comparison chart legend">
+                        <span className="compare-legend-item">
+                          <span
+                            className="compare-legend-marker compare-legend-marker--period-a"
+                            aria-hidden="true"
+                          />
+                          <span className="compare-legend-text">
+                            <strong>Period A</strong> {comparisonPeriodALabel}
+                          </span>
+                        </span>
+                        <span className="compare-legend-item">
+                          <span
+                            className="compare-legend-marker compare-legend-marker--period-b"
+                            aria-hidden="true"
+                          />
+                          <span className="compare-legend-text">
+                            <strong>Period B</strong> {comparisonPeriodBWindowLabel}
+                          </span>
+                        </span>
+                        {showComparisonCdf && (
+                          <>
+                            <span className="compare-legend-item">
+                              <span
+                                className="compare-legend-marker compare-legend-marker--cdf-a"
+                                aria-hidden="true"
+                              />
+                              <span className="compare-legend-text">
+                                <strong>CDF A</strong>
+                              </span>
+                            </span>
+                            <span className="compare-legend-item">
+                              <span
+                                className="compare-legend-marker compare-legend-marker--cdf-b"
+                                aria-hidden="true"
+                              />
+                              <span className="compare-legend-text">
+                                <strong>CDF B</strong>
+                              </span>
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    {comparisonDistributionData.length > 0 ? (
                       <ResponsiveContainer
                         width="100%"
                         height={300}
                         initialDimension={{ width: 360, height: 300 }}
                       >
-                        <BarChart
-                          data={comparisonBarData}
-                          margin={{ top: 12, right: 16, left: 8, bottom: 56 }}
+                        <ComposedChart
+                          data={comparisonDistributionData}
+                          margin={{ top: 12, right: 20, left: 8, bottom: 74 }}
                         >
                           <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
                           <XAxis
-                            dataKey="name"
+                            dataKey="binLabel"
                             tick={{ fontSize: 12, fill: '#cbd5e1' }}
                             axisLine={{ stroke: '#475569' }}
+                            angle={-24}
+                            textAnchor="end"
+                            interval={0}
+                            height={80}
                           />
-                          <YAxis tick={{ fontSize: 11, fill: '#cbd5e1' }} axisLine={{ stroke: '#475569' }} />
+                          <YAxis
+                            domain={[0, 100]}
+                            tick={{ fontSize: 11, fill: '#cbd5e1' }}
+                            tickFormatter={(value) => `${value}%`}
+                            axisLine={{ stroke: '#475569' }}
+                          />
                           <Tooltip
                             cursor={{ fill: 'rgba(96, 165, 250, 0.15)' }}
                             content={({ active, payload }) => {
                               if (!active || !payload?.[0]) return null
-                              const d = payload[0].payload as (typeof comparisonBarData)[0]
+                              const d = payload[0].payload as (typeof comparisonDistributionData)[number]
                               return (
                                 <div className="chart-tooltip">
-                                  <div className="chart-tooltip-title">{d.name}</div>
-                                  <div className="chart-tooltip-sub">{d.periodLabel}</div>
+                                  <div className="chart-tooltip-title">{d.binLabel}</div>
+                                  <div className="chart-tooltip-sub">{selectedKpiMeta.label}</div>
                                   <div className="chart-tooltip-kpi">
-                                    {d.meta.label}: <strong>{d.meta.format(d.value)}</strong>
+                                    <strong>Period A</strong> ({comparisonPeriodALabel}): {d.periodACount}{' '}
+                                    sessions ({d.periodAPct.toFixed(1)}%)
                                   </div>
+                                  <div className="chart-tooltip-kpi">
+                                    <strong>Period B</strong> ({comparisonPeriodBWindowLabel}):{' '}
+                                    {d.periodBCount} sessions ({d.periodBPct.toFixed(1)}%)
+                                  </div>
+                                  {showComparisonCdf && (
+                                    <div className="chart-tooltip-kpi">
+                                      CDF A/B: {d.periodACdfPct.toFixed(1)}% /{' '}
+                                      {d.periodBCdfPct.toFixed(1)}%
+                                    </div>
+                                  )}
+                                  <div className="chart-tooltip-sub">{comparisonScopeTooltip}</div>
                                 </div>
                               )
                             }}
                           />
-                          <Bar dataKey="value" radius={[4, 4, 0, 0]} maxBarSize={72}>
-                            {comparisonBarData.map((_, i) => (
-                              <Cell key={i} fill={i === 0 ? '#60a5fa' : '#94a3b8'} />
-                            ))}
-                          </Bar>
-                        </BarChart>
+                          <Bar
+                            dataKey="periodAPct"
+                            name="Period A %"
+                            fill="#60a5fa"
+                            radius={[4, 4, 0, 0]}
+                            maxBarSize={26}
+                          />
+                          <Bar
+                            dataKey="periodBPct"
+                            name="Period B %"
+                            fill="#94a3b8"
+                            radius={[4, 4, 0, 0]}
+                            maxBarSize={26}
+                          />
+                          {showComparisonCdf && (
+                            <>
+                              <Line
+                                type="monotone"
+                                dataKey="periodACdfPct"
+                                name="Period A CDF"
+                                stroke="#f59e0b"
+                                strokeWidth={2}
+                                dot={false}
+                              />
+                              <Line
+                                type="monotone"
+                                dataKey="periodBCdfPct"
+                                name="Period B CDF"
+                                stroke="#22d3ee"
+                                strokeWidth={2}
+                                dot={false}
+                                strokeDasharray="4 3"
+                              />
+                            </>
+                          )}
+                        </ComposedChart>
                       </ResponsiveContainer>
                     ) : (
                       <p className="muted small">No session data for comparison.</p>
                     )}
-                    <div className="compare-x-labels">
-                      {comparisonBarData.map((d) => (
-                        <div key={d.key} className="compare-x-label">
-                          <span className="compare-x-name">{d.name}</span>
-                          <span className="compare-x-period">{d.periodLabel}</span>
-                        </div>
-                      ))}
-                    </div>
+                    <p className="compare-footnote muted small">{comparisonScopeTooltip}</p>
                   </figure>
                 </div>
               </div>

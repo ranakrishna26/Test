@@ -1,14 +1,16 @@
+import { DEFAULT_KPI_ID, isKpiId, type KpiId } from '../data/kpis'
+
 const STORAGE_KEY = 'operator-dashboard-global-filter-presets'
 
 export type GlobalFilterSnapshot = {
   timeRange: string
   customTimeRangeStart: string
   customTimeRangeEnd: string
-  technology: string
   service: string
   networkMode: 'all' | 'sa' | 'nsa'
   subscriberType: string
   cellAttributes: string
+  selectedKpiId: KpiId
 }
 
 /** Subset of global filters applied to subscriber cohorts (cell table, drill-down, map). */
@@ -17,7 +19,6 @@ export type SubscriberGlobalFilters = Pick<
   | 'timeRange'
   | 'customTimeRangeStart'
   | 'customTimeRangeEnd'
-  | 'technology'
   | 'service'
   | 'networkMode'
   | 'subscriberType'
@@ -27,10 +28,20 @@ export const ALL_SUBSCRIBER_FILTERS: SubscriberGlobalFilters = {
   timeRange: '24h',
   customTimeRangeStart: '',
   customTimeRangeEnd: '',
-  technology: 'all',
   service: 'all',
-  networkMode: 'all',
+  networkMode: 'sa',
   subscriberType: 'all',
+}
+
+export const DEFAULT_GLOBAL_FILTER_SNAPSHOT: GlobalFilterSnapshot = {
+  timeRange: '24h',
+  customTimeRangeStart: '',
+  customTimeRangeEnd: '',
+  service: 'all',
+  networkMode: 'sa',
+  subscriberType: 'all',
+  cellAttributes: '',
+  selectedKpiId: DEFAULT_KPI_ID,
 }
 
 export type SavedFilterPreset = {
@@ -50,11 +61,11 @@ function isSnapshot(x: unknown): x is GlobalFilterSnapshot {
     typeof x.timeRange === 'string' &&
     typeof x.customTimeRangeStart === 'string' &&
     typeof x.customTimeRangeEnd === 'string' &&
-    typeof x.technology === 'string' &&
     typeof x.service === 'string' &&
     (x.networkMode === 'all' || x.networkMode === 'sa' || x.networkMode === 'nsa') &&
     typeof x.subscriberType === 'string' &&
-    typeof x.cellAttributes === 'string'
+    typeof x.cellAttributes === 'string' &&
+    isKpiId(x.selectedKpiId)
   )
 }
 
@@ -73,20 +84,21 @@ function normalizeSnapshot(x: unknown): GlobalFilterSnapshot | null {
   const networkMode =
     x.networkMode === 'sa' || x.networkMode === 'nsa' || x.networkMode === 'all'
       ? x.networkMode
-      : 'all'
+      : 'sa'
   const timeRange = typeof x.timeRange === 'string' ? x.timeRange : null
   const subscriberType = typeof x.subscriberType === 'string' ? x.subscriberType : null
   const cellAttributes = typeof x.cellAttributes === 'string' ? x.cellAttributes : null
   if (!timeRange || !subscriberType || cellAttributes === null) return null
+  const selectedKpiId = isKpiId(x.selectedKpiId) ? x.selectedKpiId : DEFAULT_KPI_ID
   return {
     timeRange,
     customTimeRangeStart: typeof x.customTimeRangeStart === 'string' ? x.customTimeRangeStart : '',
     customTimeRangeEnd: typeof x.customTimeRangeEnd === 'string' ? x.customTimeRangeEnd : '',
-    technology: typeof x.technology === 'string' ? x.technology : 'all',
     service: typeof x.service === 'string' ? x.service : 'all',
     networkMode,
     subscriberType,
     cellAttributes,
+    selectedKpiId,
   }
 }
 

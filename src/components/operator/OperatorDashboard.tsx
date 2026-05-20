@@ -20,11 +20,6 @@ import {
   applyGlobalSubscriberFilters,
   cellById,
   cellKpiValue,
-  cellTableCallDropMetrics,
-  cellTableFailureMetrics,
-  cellTableHoPctMetrics,
-  cellTablePayloadDlMetrics,
-  cellTablePayloadUlMetrics,
   comparePeriodBLabel,
   computePeriodBKpiValueByKpi,
   formatKpiValue,
@@ -57,6 +52,7 @@ import {
   type KpiDistributionBin,
   type KpiId,
 } from '../../data/kpis'
+import { DashboardTopHeader } from './DashboardTopHeader'
 
 type View = 'cells' | 'subscribers' | 'sessions'
 
@@ -175,68 +171,36 @@ function matchImsi(q: string, imsi: string): boolean {
   return imsi.replace(/\s/g, '').toLowerCase().includes(n)
 }
 
-/** Filtered footprint cohort: with issue / cohort size; 0/0 when filters exclude everyone; em dash when no anchored subs. */
-function CellFootprintRatio({
-  affected,
-  total,
-  fromAnchors,
-  noMatchTooltip,
-  ranTooltip,
-  issueDescriptor = 'this issue',
-}: {
-  affected: number
-  total: number
-  fromAnchors: boolean
-  noMatchTooltip: string
-  ranTooltip: string
-  /** Phrase used in tooltip, e.g. "setup/access failures" or "call drops". */
-  issueDescriptor?: string
-}) {
-  if (fromAnchors) {
-    const cohortTooltip =
-      total === 0
-        ? noMatchTooltip
-        : `Subscribers with ${issueDescriptor} / in cohort (after global filters): ${affected} subscriber${
-            affected === 1 ? '' : 's'
-          } with ${issueDescriptor}, ${total} in the footprint cohort.`
-    return (
-      <span className="metric-with-impact" title={cohortTooltip}>
-        <span className="metric-with-impact__primary">
-          {affected}/{total}
-        </span>
-        <span className="muted"> subs</span>
-      </span>
-    )
-  }
-  return (
-    <span className="metric-with-impact" title={ranTooltip}>
-      <span className="muted">—</span>
-    </span>
-  )
-}
-
 function cellTableFootprintHint(tab: TableTab): string {
   switch (tab) {
     case 'failure':
-      return 'Same filtered footprint as the subscriber list (this cell and neighbours; global filters on the bar). With issue / cohort counts subscribers with any setup/access failure; denominator is cohort size. Subscriber search only filters the subscriber table.'
+      return 'Same filtered footprint as the subscriber list (this cell and neighbours; global filters on the bar). Subscriber search only filters the subscriber table.'
     case 'callDrop':
-      return 'Same filtered footprint as the subscriber list (this cell and neighbours; global filters on the bar). With issue / cohort counts subscribers with any call drop; denominator is cohort size. Subscriber search only filters the subscriber table.'
+      return 'Same filtered footprint as the subscriber list (this cell and neighbours; global filters on the bar). Subscriber search only filters the subscriber table.'
     case 'payload':
-      return 'Columns match the subscriber drill-down footprint (this cell and neighbours; global filters). DL and UL columns compare each subscriber to a fraction of the cell RAN throughput. Subscriber search only filters the subscriber table.'
+      return 'Rows match the subscriber drill-down footprint (this cell and neighbours; global filters). Subscriber search only filters the subscriber table.'
     case 'handover':
-      return 'Columns match the subscriber drill-down footprint (this cell and neighbours; global filters). With issue / in cohort reflects subscribers under the HO success threshold for that cell. Subscriber search only filters the subscriber table.'
+      return 'Rows match the subscriber drill-down footprint (this cell and neighbours; global filters). Subscriber search only filters the subscriber table.'
     default:
       return ''
   }
 }
 
 function cellDetailColSpan(tab: TableTab): number {
-  return tab === 'payload' || tab === 'handover' ? 6 : 5
+  switch (tab) {
+    case 'handover':
+      return 4
+    default:
+      return 3
+  }
 }
 
 function CellDetailsPanel({ cell }: { cell: NetworkCell }) {
   return (
     <div className="cell-details-grid" role="group" aria-label={`Details for ${cell.name}`}>
+      <span>
+        <strong>Cell ID</strong>: {cell.id}
+      </span>
       <span>
         <strong>Site</strong>: {cell.siteCode}
       </span>
@@ -908,6 +872,7 @@ export function OperatorDashboard() {
 
   return (
     <div className="operator-app">
+      <DashboardTopHeader />
       <GlobalFiltersBar
         timeRange={timeRange}
         onTimeRange={setTimeRange}
@@ -921,6 +886,8 @@ export function OperatorDashboard() {
         onSubscriberType={setSubscriberType}
         networkMode={networkMode}
         onNetworkMode={setNetworkMode}
+        cellAttributes={cellAttributes}
+        onCellAttributes={setCellAttributes}
         selectedKpiId={selectedKpiId}
         onSelectedKpiId={setSelectedKpiId}
         presets={filterPresets}
@@ -999,14 +966,11 @@ export function OperatorDashboard() {
                         <tr>
                           <th className="row-expand-col" aria-label="Expand row details" />
                           <th>Cell name</th>
-                          <th>Cell ID</th>
-                          <th>With issue / in cohort</th>
                           <th>{selectedKpiMeta.label}</th>
                         </tr>
                       </thead>
                       <tbody>
                         {visibleRanked.map((c) => {
-                          const m = cellTableFailureMetrics(c, subscriberGlobalFilters)
                           const isExpanded = expandedCellIds.has(c.id)
                           return (
                             <Fragment key={c.id}>
@@ -1028,17 +992,6 @@ export function OperatorDashboard() {
                                   </button>
                                 </td>
                                 <td>{c.name}</td>
-                                <td className="muted">{c.id}</td>
-                                <td>
-                                  <CellFootprintRatio
-                                    affected={m.affected}
-                                    total={m.total}
-                                    fromAnchors={m.fromAnchors}
-                                    noMatchTooltip="No subscribers match current global filters in this footprint."
-                                    ranTooltip={`No subscribers in this footprint for drill-down. RAN: ${c.setupAccessFailures} failures`}
-                                    issueDescriptor="setup/access failures"
-                                  />
-                                </td>
                                 <td>{formatKpiValue(selectedKpiId, cellKpiValue(c, subscriberGlobalFilters, selectedKpiId))}</td>
                               </tr>
                               {isExpanded && (
@@ -1060,14 +1013,11 @@ export function OperatorDashboard() {
                         <tr>
                           <th className="row-expand-col" aria-label="Expand row details" />
                           <th>Cell name</th>
-                          <th>Cell ID</th>
-                          <th>With issue / in cohort</th>
                           <th>{selectedKpiMeta.label}</th>
                         </tr>
                       </thead>
                       <tbody>
                         {visibleRanked.map((c) => {
-                          const m = cellTableCallDropMetrics(c, subscriberGlobalFilters)
                           const isExpanded = expandedCellIds.has(c.id)
                           return (
                             <Fragment key={c.id}>
@@ -1089,17 +1039,6 @@ export function OperatorDashboard() {
                                   </button>
                                 </td>
                                 <td>{c.name}</td>
-                                <td className="muted">{c.id}</td>
-                                <td>
-                                  <CellFootprintRatio
-                                    affected={m.affected}
-                                    total={m.total}
-                                    fromAnchors={m.fromAnchors}
-                                    noMatchTooltip="No subscribers match current global filters in this footprint."
-                                    ranTooltip={`No subscribers in this footprint for drill-down. RAN: ${c.callDrops} drops`}
-                                    issueDescriptor="call drops"
-                                  />
-                                </td>
                                 <td>{formatKpiValue(selectedKpiId, cellKpiValue(c, subscriberGlobalFilters, selectedKpiId))}</td>
                               </tr>
                               {isExpanded && (
@@ -1121,16 +1060,11 @@ export function OperatorDashboard() {
                         <tr>
                           <th className="row-expand-col" aria-label="Expand row details" />
                           <th>Cell name</th>
-                          <th>Cell ID</th>
-                          <th>DL: with issue / in cohort</th>
-                          <th>UL: with issue / in cohort</th>
                           <th>{selectedKpiMeta.label}</th>
                         </tr>
                       </thead>
                       <tbody>
                         {visibleRanked.map((c) => {
-                          const dl = cellTablePayloadDlMetrics(c, subscriberGlobalFilters)
-                          const ul = cellTablePayloadUlMetrics(c, subscriberGlobalFilters)
                           const isExpanded = expandedCellIds.has(c.id)
                           return (
                             <Fragment key={c.id}>
@@ -1152,25 +1086,6 @@ export function OperatorDashboard() {
                                   </button>
                                 </td>
                                 <td>{c.name}</td>
-                                <td className="muted">{c.id}</td>
-                                <td>
-                                  <CellFootprintRatio
-                                    affected={dl.affected}
-                                    total={dl.total}
-                                    fromAnchors={dl.fromAnchors}
-                                    noMatchTooltip="No subscribers match current global filters in this footprint."
-                                    ranTooltip={`No subscribers in this footprint for drill-down. RAN DL: ${c.dlMbps} Mbps`}
-                                  />
-                                </td>
-                                <td>
-                                  <CellFootprintRatio
-                                    affected={ul.affected}
-                                    total={ul.total}
-                                    fromAnchors={ul.fromAnchors}
-                                    noMatchTooltip="No subscribers match current global filters in this footprint."
-                                    ranTooltip={`No subscribers in this footprint for drill-down. RAN UL: ${c.ulMbps} Mbps`}
-                                  />
-                                </td>
                                 <td>{formatKpiValue(selectedKpiId, cellKpiValue(c, subscriberGlobalFilters, selectedKpiId))}</td>
                               </tr>
                               {isExpanded && (
@@ -1192,15 +1107,12 @@ export function OperatorDashboard() {
                         <tr>
                           <th className="row-expand-col" aria-label="Expand row details" />
                           <th>Cell name</th>
-                          <th>Cell ID</th>
                           <th>Total handovers</th>
-                          <th>With issue / in cohort</th>
                           <th>{selectedKpiMeta.label}</th>
                         </tr>
                       </thead>
                       <tbody>
                         {visibleRanked.map((c) => {
-                          const m = cellTableHoPctMetrics(c, subscriberGlobalFilters)
                           const isExpanded = expandedCellIds.has(c.id)
                           return (
                             <Fragment key={c.id}>
@@ -1222,17 +1134,7 @@ export function OperatorDashboard() {
                                   </button>
                                 </td>
                                 <td>{c.name}</td>
-                                <td className="muted">{c.id}</td>
                                 <td>{c.totalHandovers.toLocaleString()}</td>
-                                <td>
-                                  <CellFootprintRatio
-                                    affected={m.affected}
-                                    total={m.total}
-                                    fromAnchors={m.fromAnchors}
-                                    noMatchTooltip="No subscribers match current global filters in this footprint."
-                                    ranTooltip={`No subscribers in this footprint for drill-down. RAN HO: ${c.hoSuccessPct.toFixed(1)}%`}
-                                  />
-                                </td>
                                 <td>{formatKpiValue(selectedKpiId, cellKpiValue(c, subscriberGlobalFilters, selectedKpiId))}</td>
                               </tr>
                               {isExpanded && (

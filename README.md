@@ -2,6 +2,17 @@
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
+## Mapbox theme configuration
+
+Set the map style via Vite env vars:
+
+```bash
+VITE_MAPBOX_ACCESS_TOKEN=your_mapbox_access_token
+VITE_MAPBOX_STYLE_URL=mapbox://styles/<username>/<style_id>
+```
+
+`VITE_MAPBOX_STYLE_URL` is optional. If omitted, the operator map falls back to `mapbox://styles/mapbox/dark-v11`.
+
 Currently, two official plugins are available:
 
 - [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)

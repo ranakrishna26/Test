@@ -957,6 +957,39 @@ html {
   margin-bottom: 0.35rem;
 }
 
+.map-hover-kpi-line {
+  font-weight: 600;
+  font-size: 0.78rem;
+  margin-bottom: 0.25rem;
+}
+
+.map-hover-value {
+  font-weight: 500;
+}
+
+.map-hover-muted {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.map-hover-code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.68rem;
+}
+
+.map-hover-hint {
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.65rem;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.mapbox-pixel-hover-popup .mapboxgl-popup-content {
+  pointer-events: none;
+}
+
 .map-legend-panel {
   position: absolute;
   left: 0.6rem;

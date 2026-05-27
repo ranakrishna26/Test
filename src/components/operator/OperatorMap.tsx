@@ -118,6 +118,40 @@ type PixelProps = {
   hasSelection: number
 }
 
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+/** Hover copy: KPI at point (global KPI), quality band, spatial + session context; click still selects session. */
+function buildPixelHoverTooltipHtml(
+  f: mapboxgl.MapboxGeoJSONFeature | Feature<Point, PixelProps>,
+  kpiId: KpiId,
+): string {
+  const p = f.properties as PixelProps | null | undefined
+  if (!p) return ''
+  const sessionId = String(p.sessionId ?? '')
+  const cellId = String(p.cellId ?? '')
+  const period = String(p.period ?? 'A')
+  const imsi = String(p.imsi ?? '')
+  const kpiStateLabel = String(p.kpiStateLabel ?? 'Unknown')
+  const kpiValueDisplay = String(p.kpiValueDisplay ?? 'n/a')
+  const cellName = cellById(cellId)?.name ?? 'Unknown cell'
+  const kpiLabel = kpiDefinition(kpiId).label
+  return [
+    '<ul class="map-hover-list">',
+    `<li class="map-hover-kpi-line"><strong>${escapeHtml(kpiLabel)}</strong> · ${escapeHtml(kpiStateLabel)} <span class="map-hover-value">(${escapeHtml(kpiValueDisplay)})</span></li>`,
+    `<li>${escapeHtml(cellName)} <span class="map-hover-muted">(${escapeHtml(cellId || 'n/a')})</span></li>`,
+    `<li>Period ${escapeHtml(period)} · session <span class="map-hover-code">${escapeHtml(sessionId || 'n/a')}</span></li>`,
+    `<li>Subscriber · <span class="map-hover-code">${escapeHtml(imsi || 'n/a')}</span></li>`,
+    '<li class="map-hover-hint">Click to select session in the table</li>',
+    '</ul>',
+  ].join('')
+}
+
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v))
 }
@@ -652,6 +686,10 @@ export function OperatorMap({
   const mapElRef = useRef<HTMLDivElement>(null)
   const popupRef = useRef<mapboxgl.Popup | null>(null)
   const pixelPopupRef = useRef<mapboxgl.Popup | null>(null)
+  const pixelHoverPopupRef = useRef<mapboxgl.Popup | null>(null)
+  const lastHoveredPixelFeatureIdRef = useRef<string | number | null>(null)
+  const selectedKpiIdRef = useRef<KpiId>(selectedKpiId)
+  selectedKpiIdRef.current = selectedKpiId
   const [mapReady, setMapReady] = useState(false)
   const [showPixels, setShowPixels] = useState(true)
   const [showPeriodB, setShowPeriodB] = useState(true)
@@ -788,7 +826,8 @@ export function OperatorMap({
       return
     }
     const configuredStyle = (import.meta.env.VITE_MAPBOX_STYLE_URL ?? '').trim()
-    const mapStyle = /dark/i.test(configuredStyle) ? configuredStyle : MAPBOX_FALLBACK_STYLE
+    // Use an env-provided style when available; otherwise keep the existing default.
+    const mapStyle = configuredStyle || MAPBOX_FALLBACK_STYLE
     const avgX = CELLS.reduce((a, c) => a + c.mapX, 0) / CELLS.length
     const avgY = CELLS.reduce((a, c) => a + c.mapY, 0) / CELLS.length
     const center = mapXYToLngLat(avgX, avgY)
@@ -819,6 +858,7 @@ export function OperatorMap({
       map.addSource(PIXEL_SOURCE, {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
+        generateId: true,
       })
       map.addLayer({
         id: CELL_FILL_LAYER,
@@ -867,6 +907,19 @@ export function OperatorMap({
             0.24,
             0.9,
           ],
+          'circle-stroke-width': [
+            'case',
+            ['boolean', ['feature-state', 'hover'], false],
+            2.5,
+            0,
+          ],
+          'circle-stroke-color': '#e2e8f0',
+          'circle-stroke-opacity': [
+            'case',
+            ['boolean', ['feature-state', 'hover'], false],
+            0.95,
+            0,
+          ],
         },
       })
       map.addLayer({
@@ -897,6 +950,19 @@ export function OperatorMap({
             0.14,
             0.3,
           ],
+          'circle-stroke-width': [
+            'case',
+            ['boolean', ['feature-state', 'hover'], false],
+            2.2,
+            0,
+          ],
+          'circle-stroke-color': '#e2e8f0',
+          'circle-stroke-opacity': [
+            'case',
+            ['boolean', ['feature-state', 'hover'], false],
+            0.85,
+            0,
+          ],
         },
       })
 
@@ -912,31 +978,72 @@ export function OperatorMap({
         offset: 14,
         className: 'mapbox-kpi-popup',
       })
+      pixelHoverPopupRef.current = new mapboxgl.Popup({
+        closeButton: false,
+        closeOnClick: false,
+        offset: 10,
+        maxWidth: 'min(320px, 92vw)',
+        className: 'mapbox-kpi-popup mapbox-pixel-hover-popup',
+      })
+
+      const clearPixelHoverState = () => {
+        const prev = lastHoveredPixelFeatureIdRef.current
+        if (prev != null) {
+          try {
+            map.setFeatureState({ source: PIXEL_SOURCE, id: prev }, { hover: false })
+          } catch {
+            // ignore invalid ids during style reloads
+          }
+          lastHoveredPixelFeatureIdRef.current = null
+        }
+      }
+
+      const handlePixelHoverMove = (e: mapboxgl.MapLayerMouseEvent) => {
+        const f = e.features?.[0]
+        if (!f || !e.lngLat || !pixelHoverPopupRef.current) return
+        const fid = f.id
+        if (fid !== undefined && fid !== null) {
+          if (lastHoveredPixelFeatureIdRef.current !== fid) {
+            const prev = lastHoveredPixelFeatureIdRef.current
+            if (prev != null) {
+              try {
+                map.setFeatureState({ source: PIXEL_SOURCE, id: prev }, { hover: false })
+              } catch {
+                // ignore
+              }
+            }
+            lastHoveredPixelFeatureIdRef.current = fid
+            try {
+              map.setFeatureState({ source: PIXEL_SOURCE, id: fid }, { hover: true })
+            } catch {
+              // ignore
+            }
+          }
+        } else {
+          clearPixelHoverState()
+        }
+        pixelHoverPopupRef.current
+          .setLngLat(e.lngLat)
+          .setHTML(buildPixelHoverTooltipHtml(f, selectedKpiIdRef.current))
+          .addTo(map)
+      }
+
+      const handlePixelHoverLeave = () => {
+        map.getCanvas().style.cursor = ''
+        clearPixelHoverState()
+        pixelHoverPopupRef.current?.remove()
+      }
 
       const showPixelPopup = (e: mapboxgl.MapLayerMouseEvent) => {
         const f = e.features?.[0]
         if (!f || !e.lngLat || !pixelPopupRef.current) return
+        pixelHoverPopupRef.current?.remove()
+        clearPixelHoverState()
         const sessionId = String(f.properties?.sessionId ?? '')
-        const cellId = String(f.properties?.cellId ?? '')
-        const period = String(f.properties?.period ?? 'A')
-        const imsi = String(f.properties?.imsi ?? '')
-        const kpiStateLabel = String(f.properties?.kpiStateLabel ?? 'Unknown')
-        const kpiValueDisplay = String(f.properties?.kpiValueDisplay ?? 'n/a')
         if (sessionId) onSessionSelect?.(sessionId)
-        const cellName = cellById(cellId)?.name ?? 'Unknown cell'
         pixelPopupRef.current
           .setLngLat(e.lngLat)
-          .setHTML(
-            [
-              '<ul class="map-hover-list">',
-              `<li>Session ${sessionId || 'n/a'}</li>`,
-              `<li>${cellName} (${cellId || 'n/a'})</li>`,
-              `<li>Subscriber: ${imsi || 'n/a'}</li>`,
-              `<li>Period ${period} · ${kpiDefinition(selectedKpiId).label}</li>`,
-              `<li>${kpiStateLabel} (${kpiValueDisplay})</li>`,
-              '</ul>',
-            ].join(''),
-          )
+          .setHTML(buildPixelHoverTooltipHtml(f, selectedKpiIdRef.current))
           .addTo(map)
       }
 
@@ -956,21 +1063,21 @@ export function OperatorMap({
         const f = e.features?.[0]
         const id = String(f?.properties?.cellId ?? '')
         pixelPopupRef.current?.remove()
+        pixelHoverPopupRef.current?.remove()
+        clearPixelHoverState()
         if (id) onCellSelect?.(id)
       })
 
       map.on('mouseenter', PIXEL_A_LAYER, () => {
         map.getCanvas().style.cursor = 'pointer'
       })
-      map.on('mouseleave', PIXEL_A_LAYER, () => {
-        map.getCanvas().style.cursor = ''
-      })
+      map.on('mouseleave', PIXEL_A_LAYER, handlePixelHoverLeave)
+      map.on('mousemove', PIXEL_A_LAYER, handlePixelHoverMove)
       map.on('mouseenter', PIXEL_B_LAYER, () => {
         map.getCanvas().style.cursor = 'pointer'
       })
-      map.on('mouseleave', PIXEL_B_LAYER, () => {
-        map.getCanvas().style.cursor = ''
-      })
+      map.on('mouseleave', PIXEL_B_LAYER, handlePixelHoverLeave)
+      map.on('mousemove', PIXEL_B_LAYER, handlePixelHoverMove)
       map.on('click', PIXEL_A_LAYER, showPixelPopup)
       map.on('click', PIXEL_B_LAYER, showPixelPopup)
 
@@ -980,6 +1087,8 @@ export function OperatorMap({
         })
         if (clicked.length === 0) {
           pixelPopupRef.current?.remove()
+          pixelHoverPopupRef.current?.remove()
+          clearPixelHoverState()
           onMapBackgroundClick?.()
         }
       })
@@ -992,11 +1101,22 @@ export function OperatorMap({
       popupRef.current = null
       pixelPopupRef.current?.remove()
       pixelPopupRef.current = null
+      pixelHoverPopupRef.current?.remove()
+      pixelHoverPopupRef.current = null
+      const prev = lastHoveredPixelFeatureIdRef.current
+      if (prev != null && map.getSource(PIXEL_SOURCE)) {
+        try {
+          map.setFeatureState({ source: PIXEL_SOURCE, id: prev }, { hover: false })
+        } catch {
+          // ignore
+        }
+      }
+      lastHoveredPixelFeatureIdRef.current = null
       map.remove()
       mapRef.current = null
       setMapReady(false)
     }
-  }, [onCellSelect, onMapBackgroundClick, onSessionSelect, selectedKpiId])
+  }, [onCellSelect, onMapBackgroundClick, onSessionSelect])
 
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
@@ -1008,6 +1128,22 @@ export function OperatorMap({
     if (!mapReady || !mapRef.current) return
     const src = mapRef.current.getSource(PIXEL_SOURCE) as GeoJSONSource | undefined
     src?.setData(pixelCollection)
+  }, [mapReady, pixelCollection])
+
+  /** Pixel GeoJSON is replaced often; clear hover ring + hover popup so feature-state IDs stay consistent. */
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const map = mapRef.current
+    const prev = lastHoveredPixelFeatureIdRef.current
+    if (prev != null && map.getSource(PIXEL_SOURCE)) {
+      try {
+        map.setFeatureState({ source: PIXEL_SOURCE, id: prev }, { hover: false })
+      } catch {
+        // ignore
+      }
+    }
+    lastHoveredPixelFeatureIdRef.current = null
+    pixelHoverPopupRef.current?.remove()
   }, [mapReady, pixelCollection])
 
   useEffect(() => {

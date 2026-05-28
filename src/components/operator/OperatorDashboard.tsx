@@ -26,6 +26,7 @@ import {
   getSessions,
   globalTimeRangeLabel,
   rankedCellsByKpi,
+  subscriberSessionScopeNote,
   sessionKpiValue,
   sortSubscribersByKpi,
   subscriberKpiValue,
@@ -436,8 +437,8 @@ export function OperatorDashboard() {
   }, [tableImsiSearch])
 
   const allSessionsForSubscriber = useMemo(
-    () => (selectedImsi ? getSessions(selectedImsi) : []),
-    [selectedImsi],
+    () => (selectedImsi ? getSessions(selectedImsi, subscriberGlobalFilters) : []),
+    [selectedImsi, subscriberGlobalFilters],
   )
 
   const sessions = useMemo(() => {
@@ -447,8 +448,10 @@ export function OperatorDashboard() {
 
   const cellFocusSessions = useMemo(() => {
     if (view !== 'subscribers' || !selectedCellId) return []
-    return footprintSubscribers.flatMap((subscriber) => getSessions(subscriber.imsi))
-  }, [view, selectedCellId, footprintSubscribers])
+    return footprintSubscribers.flatMap((subscriber) =>
+      getSessions(subscriber.imsi, subscriberGlobalFilters),
+    )
+  }, [view, selectedCellId, footprintSubscribers, subscriberGlobalFilters])
 
   const isSubscriberSessionView = view === 'sessions' && !!selectedImsi
   const isCellFocusView = view === 'subscribers' && !!selectedCellId
@@ -475,7 +478,7 @@ export function OperatorDashboard() {
       count: 0,
     }))
     for (const peer of peerRows) {
-      const peerSessions = getSessions(peer.imsi).filter((session) =>
+      const peerSessions = getSessions(peer.imsi, subscriberGlobalFilters).filter((session) =>
         sessionCellFilter ? session.cellId === sessionCellFilter : true,
       )
       if (!peerSessions.length) continue
@@ -1217,8 +1220,14 @@ export function OperatorDashboard() {
               <>
                 <p className="context-line">
                   Session list and charts for the subscriber above. Map cell click filters rows;
-                  empty map clears the filter.
+                  empty map clears the filter. Map points are KPI visualization samples (see map
+                  legend), not one dot per network attachment.
                 </p>
+                {subscriberSessionScopeNote(selectedImsi, timeRange, sessions.length) ? (
+                  <p className="context-line context-line--scope" role="note">
+                    {subscriberSessionScopeNote(selectedImsi, timeRange, sessions.length)}
+                  </p>
+                ) : null}
                 {sessionCellFilter && (
                   <p className="session-cell-filter-banner" role="status">
                     Showing sessions on{' '}
@@ -1334,11 +1343,7 @@ export function OperatorDashboard() {
                       ).toFixed(1)}{' '}
                       Mbps
                     </p>
-                  ) : (
-                    <p className="session-selection-chip" role="status">
-                      Select a session row or map pixel to highlight it across charts.
-                    </p>
-                  )}
+                  ) : null}
                   {isCellFocusView && visibleSelectedSessionIds.length > 0 && (
                     <p className="session-selection-chip" role="status">
                       Per-session highlight overlays are disabled in aggregated cohort mode to keep

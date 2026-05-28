@@ -58,8 +58,6 @@ html {
 /* Present dashboard UI labels in sentence case. */
 .operator-app :is(
     .dashboard-top-header__brand,
-    .dashboard-top-header__section,
-    .dashboard-top-header__user-name,
     .filter-chip > span,
     .filters-dropdown-heading,
     .filters-dropdown-empty,
@@ -98,8 +96,6 @@ html {
 
 .operator-app :is(
     .dashboard-top-header__brand,
-    .dashboard-top-header__section,
-    .dashboard-top-header__user-name,
     .filter-chip > span,
     .filters-dropdown-heading,
     .filters-dropdown-empty,
@@ -178,6 +174,7 @@ html {
   font-weight: 500;
   color: #dbeafe;
   white-space: nowrap;
+  text-transform: none;
 }
 
 .dashboard-top-header__section--subtle {
@@ -203,6 +200,7 @@ html {
   font-weight: 500;
   color: #f1f5f9;
   white-space: nowrap;
+  text-transform: none;
 }
 
 .dashboard-top-header__caret {
@@ -1045,6 +1043,56 @@ html {
 .map-legend-hide-btn:hover {
   color: var(--text);
   border-color: #3b82f6;
+}
+
+.map-legend-note {
+  margin: 0 0 0.45rem;
+  font-size: 0.64rem;
+  line-height: 1.35;
+  color: #94a3b8;
+  text-transform: none;
+}
+
+.map-legend-note--scope {
+  color: #cbd5e1;
+}
+
+.map-legend-stats {
+  margin: 0 0 0.4rem;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: #e2e8f0;
+  text-transform: none;
+}
+
+.map-legend-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0.35rem 0 0.45rem;
+  font-size: 0.68rem;
+  text-transform: none;
+}
+
+.map-legend-field-label {
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.map-legend-select {
+  width: 100%;
+  font-size: 0.68rem;
+  padding: 0.2rem 0.35rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: #0f172a;
+  color: var(--text);
+}
+
+.context-line--scope {
+  color: #94a3b8;
+  font-size: 0.72rem;
+  text-transform: none;
 }
 
 .map-legend-row {

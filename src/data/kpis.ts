@@ -339,3 +339,51 @@ export function kpiDistributionBins(kpiId: KpiId): KpiDistributionBin[] {
       return [{ min: Number.NEGATIVE_INFINITY, max: Number.POSITIVE_INFINITY, label: 'All values' }]
   }
 }
+
+export type KpiStateBand = 'meetsTarget' | 'nearBreach' | 'breached'
+
+/**
+ * Per-session / per-pixel thresholds — tighter than cell cohort totals so a single
+ * bad session reads as warning or bad on the map (e.g. RLF 3–4 is not "good").
+ */
+export const SESSION_KPI_THRESHOLDS: Partial<Record<KpiId, KpiThresholds>> = {
+  connectivity_attach_success_pct: { good: 96, warning: 90 },
+  connectivity_nr_rrc_setup_success_pct: { good: 96, warning: 90 },
+  reliability_rlf_count: { good: 1, warning: 3 },
+  reliability_x2_xn1_setup_success_pct: { good: 96, warning: 90 },
+  reliability_5g_ho_success_pct: { good: 95, warning: 88 },
+  reliability_irat_hos: { good: 0, warning: 1 },
+  signal_rsrp: { good: -98, warning: -108 },
+  signal_rsrq: { good: -11, warning: -15 },
+  signal_disnr: { good: 10, warning: 6 },
+  signal_uisnr: { good: 9, warning: 5 },
+  signal_bler: { good: 1.5, warning: 3.5 },
+  signal_cqi: { good: 9, warning: 6 },
+  throughput_dl_mbps: { good: 35, warning: 18 },
+  throughput_ul_mbps: { good: 10, warning: 5 },
+  packet_ota_delay_ms: { good: 35, warning: 55 },
+  packet_ota_drops: { good: 1, warning: 3 },
+}
+
+function bandFromThresholds(
+  direction: KpiDirection,
+  value: number,
+  thresholds: KpiThresholds,
+): KpiStateBand {
+  if (direction === 'higher_is_better') {
+    if (value >= thresholds.good) return 'meetsTarget'
+    if (value >= thresholds.warning) return 'nearBreach'
+    return 'breached'
+  }
+  if (value <= thresholds.good) return 'meetsTarget'
+  if (value <= thresholds.warning) return 'nearBreach'
+  return 'breached'
+}
+
+/** KPI band for one session row or map pixel (not cell-level aggregates). */
+export function sessionKpiBand(kpiId: KpiId, value: number): KpiStateBand {
+  const meta = KPI_BY_ID[kpiId]
+  const thresholds = SESSION_KPI_THRESHOLDS[kpiId] ?? meta.thresholds
+  if (!thresholds) return 'nearBreach'
+  return bandFromThresholds(meta.direction, value, thresholds)
+}

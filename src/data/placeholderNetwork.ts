@@ -7,6 +7,7 @@ import {
 import {
   KPI_BY_ID,
   formatKpiValueByDefinition,
+  sessionKpiBand,
   type KpiDefinition,
   type KpiId,
 } from './kpis'
@@ -803,6 +804,32 @@ export function formatKpiValue(kpiId: KpiId, value: number): string {
   return formatKpiValueByDefinition(kpiDefinition(kpiId), value)
 }
 
+/**
+ * Worst on-cell session KPI for a subscriber journey (min for throughput, max for RLF, etc.).
+ * Returns null when the subscriber had no sessions on this cell in the scoped window.
+ */
+export function subscriberCellKpiValue(
+  cellId: string,
+  sessions: SessionRow[],
+  kpiId: KpiId,
+): number | null {
+  const onCell = sessions.filter((s) => s.cellId === cellId)
+  if (!onCell.length) return null
+  const values = onCell.map((s) => sessionKpiValue(s, kpiId))
+  const direction = kpiDefinition(kpiId).direction
+  return direction === 'higher_is_better' ? Math.min(...values) : Math.max(...values)
+}
+
+export function subscriberCellKpiBand(
+  cellId: string,
+  sessions: SessionRow[],
+  kpiId: KpiId,
+): KpiStateBand | null {
+  const value = subscriberCellKpiValue(cellId, sessions, kpiId)
+  if (value === null) return null
+  return sessionKpiBand(kpiId, value)
+}
+
 export function sessionKpiValue(session: SessionRow, kpiId: KpiId): number {
   switch (kpiId) {
     case 'connectivity_attach_success_pct':
@@ -1181,8 +1208,204 @@ function sessionsForImsi(imsi: string): SessionRow[] {
   })
 }
 
-export function getSessions(imsi: string): SessionRow[] {
-  return sessionsForImsi(imsi)
+export type SessionTimeFilters = Pick<
+  SubscriberGlobalFilters,
+  'timeRange' | 'customTimeRangeStart' | 'customTimeRangeEnd'
+>
+
+/** Map global time range to a relative window width (24h ≈ 1.0). */
+function globalTimeRangeWeight(
+  timeRange: string,
+  customStart: string,
+  customEnd: string,
+): number {
+  if (timeRange === 'custom') {
+    if (customStart && customEnd) {
+      return compareWindowWeight(
+        customRangeToTimeRange(customStart, customEnd),
+        customStart,
+        customEnd,
+      )
+    }
+    return compareWindowWeight('24h', '', '')
+  }
+  return compareWindowWeight(timeRange as ComparePeriodOption, customStart, customEnd)
+}
+
+function scaleSessionForTimeWindow(
+  session: SessionRow,
+  weight: number,
+  indexInSlice: number,
+  sliceLen: number,
+): SessionRow {
+  const baseline = 0.55
+  const factor = weight / baseline
+  const progress = sliceLen <= 1 ? 1 : (indexInSlice + 1) / sliceLen
+  const mult = 0.9 + factor * 0.1 * progress
+  return {
+    ...session,
+    throughputMbps: Math.round(session.throughputMbps * mult * 10) / 10,
+    ulMbps: Math.round(session.ulMbps * mult * 10) / 10,
+    signalQuality: Math.round(session.signalQuality * (0.97 + factor * 0.03) * 100) / 100,
+    packetLossPct: Math.round(session.packetLossPct * (0.88 + factor * 0.12) * 100) / 100,
+    setupAccessFailures: Math.max(0, Math.round(session.setupAccessFailures * factor)),
+    callDrops: Math.max(0, Math.round(session.callDrops * factor)),
+  }
+}
+
+function vipSessionStressScore(session: SessionRow): number {
+  let score = 0
+  if (session.connectivity === 'Intermittent') score += 3
+  else if (session.connectivity === 'Degraded') score += 1
+  score += session.setupAccessFailures * 2
+  score += session.callDrops * 3
+  score += session.packetLossPct
+  if (session.handoverAttempted && !session.handoverSuccess) score += 4
+  score += Math.max(0, 42 - session.throughputMbps) / 4
+  return score
+}
+
+/** VIP demo: last 15m is active highway stress (failed HOs, low TP, high loss). */
+function pickVipStressWindow(sessions: SessionRow[], count: number): SessionRow[] {
+  if (sessions.length <= count) return [...sessions]
+  let bestStart = 0
+  let bestSum = -1
+  for (let start = 0; start <= sessions.length - count; start += 1) {
+    const sum = sessions
+      .slice(start, start + count)
+      .reduce((acc, session) => acc + vipSessionStressScore(session), 0)
+    if (sum > bestSum) {
+      bestSum = sum
+      bestStart = start
+    }
+  }
+  return sessions.slice(bestStart, bestStart + count)
+}
+
+function degradeVipSessionForPoorExperience(
+  session: SessionRow,
+  indexInSlice: number,
+  sliceLen: number,
+): SessionRow {
+  const ramp = (indexInSlice + 1) / Math.max(sliceLen, 1)
+  return {
+    ...session,
+    throughputMbps: Math.round((9 + ramp * 5 + (indexInSlice % 2) * 2) * 10) / 10,
+    ulMbps: Math.round((2.2 + ramp * 1.4) * 10) / 10,
+    signalQuality: Math.round((1.85 + ramp * 0.3) * 100) / 100,
+    packetLossPct: Math.round((4.1 + ramp * 1.4 + (indexInSlice % 3) * 0.45) * 100) / 100,
+    connectivity: 'Intermittent',
+    setupAccessFailures: Math.max(session.setupAccessFailures, 4),
+    callDrops: Math.max(session.callDrops, 2),
+    handoverAttempted: true,
+    handoverSuccess: indexInSlice % 4 === 3,
+  }
+}
+
+/**
+ * VIP highway journey: short windows surface the stressed handover corridor;
+ * longer windows reveal the full drive including recovery.
+ */
+function sliceVipSessionsForTimeRange(
+  sessions: SessionRow[],
+  timeRange: string,
+  customStart: string,
+  customEnd: string,
+): SessionRow[] {
+  if (!sessions.length) return []
+  const weight = globalTimeRangeWeight(timeRange, customStart, customEnd)
+  const fraction = clampKpi(weight / 0.55, 0.12, 1)
+  const count = Math.max(1, Math.min(sessions.length, Math.round(sessions.length * fraction)))
+
+  if (weight <= 0.22) {
+    const poor = pickVipStressWindow(sessions, count)
+    return poor.map((session, index) =>
+      degradeVipSessionForPoorExperience(session, index, poor.length),
+    )
+  }
+
+  if (weight <= 0.4) {
+    const stressed = pickVipStressWindow(sessions, count)
+    return stressed.map((session, index) =>
+      scaleSessionForTimeWindow(session, weight * 0.85, index, stressed.length),
+    )
+  }
+
+  if (fraction >= 1) {
+    return sessions.map((session, index) =>
+      scaleSessionForTimeWindow(session, weight, index, sessions.length),
+    )
+  }
+
+  const sliced = sessions.slice(sessions.length - count)
+  return sliced.map((session, index) =>
+    scaleSessionForTimeWindow(session, weight, index, sliced.length),
+  )
+}
+
+/** Keep the most recent slice of the journey; widen metrics slightly for longer windows. */
+export function sliceSessionsForTimeRange(
+  sessions: SessionRow[],
+  timeRange: string,
+  customStart: string,
+  customEnd: string,
+): SessionRow[] {
+  if (!sessions.length) return []
+  const weight = globalTimeRangeWeight(timeRange, customStart, customEnd)
+  const fraction = clampKpi(weight / 0.55, 0.12, 1)
+  const count = Math.max(1, Math.min(sessions.length, Math.round(sessions.length * fraction)))
+  const sliced = sessions.slice(sessions.length - count)
+  return sliced.map((session, index) =>
+    scaleSessionForTimeWindow(session, weight, index, sliced.length),
+  )
+}
+
+/**
+ * Clarifies demo VIP time slicing vs wall-clock filtering (shown in session/map context).
+ */
+export function subscriberSessionScopeNote(
+  imsi: string,
+  timeRange: string,
+  sessionCount: number,
+): string | null {
+  if (imsi !== VIP_HIGHWAY_IMSI || sessionCount === 0) return null
+  if (timeRange === '15m') {
+    return `VIP demo: ${sessionCount} stressed journey step${sessionCount === 1 ? '' : 's'} in scope for “last 15 minutes” (worst highway handover segment, not wall-clock MR events).`
+  }
+  if (timeRange === '1h') {
+    return `VIP demo: ${sessionCount} journey steps for “last 1 hour” (stressed corridor slice).`
+  }
+  return null
+}
+
+export function countHandoverEvents(sessions: SessionRow[]): number {
+  if (!sessions.length) return 0
+  let count = 1
+  for (let i = 1; i < sessions.length; i += 1) {
+    if (sessions[i].cellId !== sessions[i - 1].cellId) count += 1
+  }
+  return count
+}
+
+export function getSessions(
+  imsi: string,
+  f: SessionTimeFilters = ALL_SUBSCRIBER_FILTERS,
+): SessionRow[] {
+  const all = sessionsForImsi(imsi)
+  if (imsi === VIP_HIGHWAY_IMSI) {
+    return sliceVipSessionsForTimeRange(
+      all,
+      f.timeRange,
+      f.customTimeRangeStart,
+      f.customTimeRangeEnd,
+    )
+  }
+  return sliceSessionsForTimeRange(
+    all,
+    f.timeRange,
+    f.customTimeRangeStart,
+    f.customTimeRangeEnd,
+  )
 }
 
 export function subscriberFootprint(imsi: string): {
@@ -1288,6 +1511,7 @@ export function mapCellSummaryLines(
   c: Cell,
   f: SubscriberGlobalFilters = ALL_SUBSCRIBER_FILTERS,
   selectedKpiId?: KpiId,
+  scopedSessions?: SessionRow[],
 ): string[] {
   const fm = cellTableFailureMetrics(c, f)
   const dr = cellTableCallDropMetrics(c, f)
@@ -1307,12 +1531,31 @@ export function mapCellSummaryLines(
     `Drops (RAN cell) ${dropShown} · Setup/access (RAN cell) ${failShown}`,
   ]
   if (selectedKpiId) {
-    lines.push(
-      `Selected KPI · ${kpiDefinition(selectedKpiId).label}: ${formatKpiValue(
-        selectedKpiId,
-        cellKpiValue(c, f, selectedKpiId),
-      )}`,
-    )
+    const scopedValue =
+      scopedSessions && scopedSessions.length > 0
+        ? subscriberCellKpiValue(c.id, scopedSessions, selectedKpiId)
+        : null
+    if (scopedValue !== null) {
+      const band = sessionKpiBand(selectedKpiId, scopedValue)
+      const bandLabel =
+        band === 'meetsTarget' ? 'Good' : band === 'nearBreach' ? 'Warning' : 'Bad'
+      lines.push(
+        `This subscriber · ${kpiDefinition(selectedKpiId).label}: ${formatKpiValue(
+          selectedKpiId,
+          scopedValue,
+        )} (${bandLabel})`,
+      )
+    } else {
+      lines.push(
+        `Selected KPI · ${kpiDefinition(selectedKpiId).label}: ${formatKpiValue(
+          selectedKpiId,
+          cellKpiValue(c, f, selectedKpiId),
+        )} (cohort)`,
+      )
+      if (scopedSessions && scopedSessions.length > 0) {
+        lines.push('This subscriber · no sessions on this cell in the current window')
+      }
+    }
   }
   if (fm.fromAnchors) {
     if (fm.total > 0) {

@@ -8,6 +8,7 @@ import {
   VIP_HIGHWAY_IMSI,
   applyGlobalSubscriberFilters,
   cellById,
+  cellKpiValue,
   formatKpiValue,
   kpiBand,
   kpiDefinition,
@@ -15,15 +16,23 @@ import {
   neighborSet,
   sessionKpiValue,
   subscribersForFootprint,
+  subscriberCellKpiBand,
   subscriberFootprint,
+  subscriberSessionScopeNote,
   type Cell,
   type KpiStateBand,
   type SessionRow,
   type SubscriberGlobalFilters,
 } from '../../data/placeholderNetwork'
-import type { KpiId } from '../../data/kpis'
+import { sessionKpiBand, type KpiId } from '../../data/kpis'
 
 type MapMode = 'all' | 'cellFocus' | 'subscriberFocus'
+
+/** How subscriber pixels are drawn on the map (operator-facing semantics). */
+export type PixelDisplayMode = 'journeySamples' | 'sessionAnchors' | 'handovers'
+
+const VIP_JOURNEY_SAMPLES_PER_SESSION = 12
+const DEFAULT_JOURNEY_SAMPLES_PER_SESSION = 18
 
 type Props = {
   mode: MapMode
@@ -49,15 +58,15 @@ const CELL_FILL_LAYER = 'cell-wedges-fill'
 const CELL_LINE_LAYER = 'cell-wedges-line'
 const PIXEL_A_LAYER = 'subscriber-pixels-a'
 const PIXEL_B_LAYER = 'subscriber-pixels-b'
-const PIXEL_KPI_COLOR_EXPR: mapboxgl.Expression = [
-  'match',
-  ['get', 'kpiState'],
-  'meetsTarget',
-  '#22c55e',
-  'nearBreach',
-  '#f59e0b',
-  '#ef4444',
-]
+const PIXEL_COLOR_EXPR: mapboxgl.Expression = ['coalesce', ['get', 'pixelColor'], '#94a3b8']
+
+/** Performance palette (top → bottom in design reference). */
+export const MAP_PERFORMANCE_COLORS = {
+  good: '#37783D',
+  fair: '#3B7591',
+  warning: '#C07931',
+  bad: '#B3322C',
+} as const
 
 const MAP_BOUNDS = {
   west: -0.255,
@@ -100,6 +109,7 @@ const VIP_HIGHWAY_ROUTE_MAIN: [number, number][] = [
 
 type CellFeatureProps = {
   cellId: string
+  cellFillColor: string
   opacity: number
   selected: number
   tooltipHtml: string
@@ -112,10 +122,79 @@ type PixelProps = {
   period: 'A' | 'B'
   kpiValue: number
   kpiValueDisplay: string
-  kpiState: 'meetsTarget' | 'nearBreach' | 'breached'
+  kpiState: KpiStateBand
   kpiStateLabel: string
+  /** KPI band color from MAP_PERFORMANCE_COLORS. */
+  pixelColor: string
   selectedSession: number
   hasSelection: number
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  const toByte = (v: number) =>
+    clamp(Math.round(v), 0, 255)
+      .toString(16)
+      .padStart(2, '0')
+  return `#${toByte(r)}${toByte(g)}${toByte(b)}`
+}
+
+function parseHexColor(hex: string): [number, number, number] {
+  const normalized = hex.replace('#', '')
+  const expanded =
+    normalized.length === 3
+      ? normalized
+          .split('')
+          .map((ch) => ch + ch)
+          .join('')
+      : normalized
+  const value = Number.parseInt(expanded, 16)
+  return [(value >> 16) & 255, (value >> 8) & 255, value & 255]
+}
+
+function mixRgb(
+  a: [number, number, number],
+  b: [number, number, number],
+  t: number,
+): [number, number, number] {
+  const w = clamp(t, 0, 1)
+  return [
+    a[0] + (b[0] - a[0]) * w,
+    a[1] + (b[1] - a[1]) * w,
+    a[2] + (b[2] - a[2]) * w,
+  ]
+}
+
+/** Map KPI band → palette (green good → red bad; blue = fair / period B tint). */
+export function performanceColorForState(
+  kpiState: KpiStateBand,
+  period: 'A' | 'B' = 'A',
+): string {
+  const base =
+    kpiState === 'meetsTarget'
+      ? MAP_PERFORMANCE_COLORS.good
+      : kpiState === 'nearBreach'
+        ? MAP_PERFORMANCE_COLORS.warning
+        : kpiState === 'breached'
+          ? MAP_PERFORMANCE_COLORS.bad
+          : MAP_PERFORMANCE_COLORS.fair
+  if (period === 'B') {
+    const rgb = mixRgb(
+      parseHexColor(base),
+      parseHexColor(MAP_PERFORMANCE_COLORS.fair),
+      0.42,
+    )
+    return rgbToHex(rgb[0], rgb[1], rgb[2])
+  }
+  return base
+}
+
+function withPixelColor(
+  props: Omit<PixelProps, 'pixelColor'>,
+): PixelProps {
+  return {
+    ...props,
+    pixelColor: performanceColorForState(props.kpiState, props.period),
+  }
 }
 
 function escapeHtml(s: string): string {
@@ -387,9 +466,146 @@ function operatorBandForKpi(
     definition.direction === 'higher_is_better'
       ? baseValue * (1 - stressFactor)
       : baseValue * (1 + stressFactor)
-  const state = kpiBand(selectedKpiId, value)
+  let state = sessionKpiBand(selectedKpiId, value)
+  if (s.connectivity === 'Intermittent' && state === 'meetsTarget') {
+    state = 'nearBreach'
+  }
+  if (
+    s.connectivity === 'Intermittent' &&
+    (s.setupAccessFailures + s.callDrops >= 4 || s.packetLossPct >= 3)
+  ) {
+    state = 'breached'
+  }
   const label = state === 'meetsTarget' ? 'Good' : state === 'nearBreach' ? 'Warning' : 'Bad'
   return { state, label, value, display: formatKpiValue(selectedKpiId, value) }
+}
+
+function journeySamplesPerSession(imsi: string): number {
+  return imsi === VIP_HIGHWAY_IMSI ? VIP_JOURNEY_SAMPLES_PER_SESSION : DEFAULT_JOURNEY_SAMPLES_PER_SESSION
+}
+
+function sessionAnchorLngLat(
+  session: SessionRow,
+  imsi: string,
+): [number, number] {
+  const cell = cellById(session.cellId)
+  if (!cell) return mapXYToLngLat(50, 50)
+  const center = mapXYToLngLat(cell.mapX, cell.mapY)
+  const seed = hashString(`${imsi}-${session.id}-anchor`)
+  const azimuth = cellSectorAzimuth(cell)
+  const offset = offsetLngLat(center, azimuth, rand01(seed + 3) * 0.00022)
+  return [
+    offset[0] + randNormal(seed + 7) * 0.00006,
+    offset[1] + randNormal(seed + 11) * 0.00005,
+  ]
+}
+
+function pushSessionPixel(
+  features: Feature<Point, PixelProps>[],
+  coordinates: [number, number],
+  session: SessionRow,
+  imsi: string,
+  selectedKpiId: KpiId,
+  period: 'A' | 'B',
+  selectedSessionIds: Set<string>,
+  penalty = 0,
+  jitter = 0,
+) {
+  const band = operatorBandForKpi(session, selectedKpiId, penalty, jitter)
+  features.push({
+    type: 'Feature',
+    geometry: { type: 'Point', coordinates },
+    properties: withPixelColor({
+      imsi,
+      sessionId: session.id,
+      cellId: session.cellId,
+      period,
+      kpiValue: band.value,
+      kpiValueDisplay: band.display,
+      kpiState: band.state,
+      kpiStateLabel: band.label,
+      selectedSession: selectedSessionIds.has(session.id) ? 1 : 0,
+      hasSelection: selectedSessionIds.size > 0 ? 1 : 0,
+    }),
+  })
+}
+
+function makeSessionAnchorPoints(
+  imsi: string,
+  sessions: SessionRow[],
+  selectedKpiId: KpiId,
+  period: 'A' | 'B',
+  selectedSessionIds: Set<string>,
+): Feature<Point, PixelProps>[] {
+  const features: Feature<Point, PixelProps>[] = []
+  const periodPenalty = period === 'B' ? 8 : 0
+  sessions.forEach((session, sessionIdx) => {
+    const handoverStress =
+      sessionIdx > 0 && sessions[sessionIdx - 1]?.cellId !== session.cellId ? 10 : 0
+    pushSessionPixel(
+      features,
+      sessionAnchorLngLat(session, imsi),
+      session,
+      imsi,
+      selectedKpiId,
+      period,
+      selectedSessionIds,
+      periodPenalty + handoverStress,
+      rand01(hashString(`${session.id}-${period}`)) * 4,
+    )
+  })
+  return features
+}
+
+function makeHandoverEventPoints(
+  imsi: string,
+  sessions: SessionRow[],
+  selectedKpiId: KpiId,
+  period: 'A' | 'B',
+  selectedSessionIds: Set<string>,
+): Feature<Point, PixelProps>[] {
+  const features: Feature<Point, PixelProps>[] = []
+  const periodPenalty = period === 'B' ? 8 : 0
+  sessions.forEach((session, sessionIdx) => {
+    const isHandover = sessionIdx > 0 && sessions[sessionIdx - 1]?.cellId !== session.cellId
+    if (sessionIdx > 0 && !isHandover) return
+    pushSessionPixel(
+      features,
+      sessionAnchorLngLat(session, imsi),
+      session,
+      imsi,
+      selectedKpiId,
+      period,
+      selectedSessionIds,
+      periodPenalty + (isHandover ? 16 : 4),
+      rand01(hashString(`${session.id}-ho-${period}`)) * 5,
+    )
+  })
+  return features
+}
+
+function makeSubscriberFocusPixels(
+  imsi: string,
+  sessions: SessionRow[],
+  selectedKpiId: KpiId,
+  period: 'A' | 'B',
+  displayMode: PixelDisplayMode,
+  selectedSessionIds: Set<string>,
+): Feature<Point, PixelProps>[] {
+  switch (displayMode) {
+    case 'sessionAnchors':
+      return makeSessionAnchorPoints(imsi, sessions, selectedKpiId, period, selectedSessionIds)
+    case 'handovers':
+      return makeHandoverEventPoints(imsi, sessions, selectedKpiId, period, selectedSessionIds)
+    default:
+      return makeSessionJourneyPoints(
+        imsi,
+        sessions,
+        selectedKpiId,
+        period,
+        selectedSessionIds,
+      )
+  }
 }
 
 function makeSessionJourneyPoints(
@@ -404,7 +620,7 @@ function makeSessionJourneyPoints(
   const periodShiftLng = period === 'B' ? 0.000045 : 0
   const periodShiftLat = period === 'B' ? -0.000035 : 0
   const periodPenalty = period === 'B' ? 11 : 0
-  const perSession = imsi === VIP_HIGHWAY_IMSI ? 56 : 18
+  const perSession = journeySamplesPerSession(imsi)
 
   if (imsi === VIP_HIGHWAY_IMSI && sessions.length) {
     const handoverCenters = sessions
@@ -460,7 +676,7 @@ function makeSessionJourneyPoints(
         features.push({
           type: 'Feature',
           geometry: { type: 'Point', coordinates: [safeLng, safeLat] },
-          properties: {
+          properties: withPixelColor({
             imsi,
             sessionId: s.id,
             cellId: s.cellId,
@@ -471,7 +687,7 @@ function makeSessionJourneyPoints(
             kpiStateLabel: band.label,
             selectedSession: selectedSessionIds.has(s.id) ? 1 : 0,
             hasSelection: selectedSessionIds.size > 0 ? 1 : 0,
-          },
+          }),
         })
       }
     })
@@ -543,7 +759,7 @@ function makeSessionJourneyPoints(
       features.push({
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [safeLng, safeLat] },
-        properties: {
+        properties: withPixelColor({
           imsi,
           sessionId: s.id,
           cellId: s.cellId,
@@ -554,7 +770,7 @@ function makeSessionJourneyPoints(
           kpiStateLabel: band.label,
           selectedSession: selectedSessionIds.has(s.id) ? 1 : 0,
           hasSelection: selectedSessionIds.size > 0 ? 1 : 0,
-        },
+        }),
       })
     }
   })
@@ -646,7 +862,7 @@ function makeActivityCloud(
         type: 'Point',
         coordinates: [safeLng, safeLat],
       },
-      properties: {
+      properties: withPixelColor({
         imsi: s.imsi,
         sessionId: `ACT-${s.imsi.slice(-7)}-${i}`,
         cellId: s.cellId,
@@ -657,7 +873,7 @@ function makeActivityCloud(
         kpiStateLabel: band.label,
         selectedSession: 0,
         hasSelection: selectedSessionIds.size > 0 ? 1 : 0,
-      },
+      }),
     })
   })
   return features
@@ -693,6 +909,7 @@ export function OperatorMap({
   const [mapReady, setMapReady] = useState(false)
   const [showPixels, setShowPixels] = useState(true)
   const [showPeriodB, setShowPeriodB] = useState(true)
+  const pixelDisplayMode: PixelDisplayMode = 'journeySamples'
   const [legendCollapsed, setLegendCollapsed] = useState(false)
   const [mapError, setMapError] = useState<string | null>(null)
   const deferMapError = (message: string) => {
@@ -734,36 +951,63 @@ export function OperatorMap({
         else if (all.has(c.id)) opacity = 0.32
         else opacity = 0.08
       }
+      let cellFillColor: string
+      if (mode === 'subscriberFocus' && subscriberImsi && sessions.length > 0) {
+        const scopedBand = subscriberCellKpiBand(c.id, sessions, selectedKpiId)
+        if (scopedBand !== null) {
+          cellFillColor = performanceColorForState(scopedBand, 'A')
+        } else if (direct.has(c.id) || all.has(c.id)) {
+          cellFillColor = MAP_PERFORMANCE_COLORS.fair
+        } else {
+          cellFillColor = performanceColorForState(
+            kpiBand(selectedKpiId, cellKpiValue(c, filters, selectedKpiId)),
+            'A',
+          )
+        }
+      } else {
+        cellFillColor = performanceColorForState(
+          kpiBand(selectedKpiId, cellKpiValue(c, filters, selectedKpiId)),
+          'A',
+        )
+      }
       return {
         type: 'Feature',
         geometry: { type: 'Polygon', coordinates: geom },
         properties: {
           cellId: c.id,
+          cellFillColor,
           opacity,
           selected: selectedCellId === c.id ? 1 : 0,
-          tooltipHtml: mapCellSummaryLines(c, filters, selectedKpiId).join('<br/>'),
+          tooltipHtml: mapCellSummaryLines(
+            c,
+            filters,
+            selectedKpiId,
+            mode === 'subscriberFocus' && subscriberImsi ? sessions : undefined,
+          ).join('<br/>'),
         },
       }
     })
     return { type: 'FeatureCollection', features }
-  }, [mode, selectedCellId, subscriberImsi, direct, all, filters, selectedKpiId])
+  }, [mode, selectedCellId, subscriberImsi, direct, all, filters, selectedKpiId, sessions])
 
   const pixelCollection = useMemo<FeatureCollection<Point, PixelProps>>(() => {
     if (mode === 'subscriberFocus' && subscriberImsi) {
-      const featuresA = makeSessionJourneyPoints(
+      const featuresA = makeSubscriberFocusPixels(
         subscriberImsi,
         sessions,
         selectedKpiId,
         'A',
+        pixelDisplayMode,
         selectedSessionIdSet,
       )
       const features = showPeriodBOverlay
         ? featuresA.concat(
-            makeSessionJourneyPoints(
+            makeSubscriberFocusPixels(
               subscriberImsi,
               sessions,
               selectedKpiId,
               'B',
+              pixelDisplayMode,
               selectedSessionIdSet,
             ),
           )
@@ -794,7 +1038,15 @@ export function OperatorMap({
     filters,
     selectedKpiId,
     showPeriodBOverlay,
+    pixelDisplayMode,
   ])
+
+  const subscriberScopeNote = useMemo(() => {
+    if (mode !== 'subscriberFocus' || !subscriberImsi || !sessions.length) {
+      return null
+    }
+    return subscriberSessionScopeNote(subscriberImsi, filters.timeRange, sessions.length)
+  }, [mode, subscriberImsi, sessions.length, filters.timeRange])
 
   const selectedPeriodAPoints = useMemo(
     () =>
@@ -810,9 +1062,10 @@ export function OperatorMap({
       return 'Blue = selected · gray = neighbour · faded = other · map and table are synced'
     if (sessionTableCellFilter)
       return 'Subscriber footprint · click cell to filter sessions · click empty map for all sessions'
-    if (subscriberImsi === VIP_HIGHWAY_IMSI)
-      return 'VIP highway demo · scoped to one corridor · degradation at corridor handovers'
-    return 'Subscriber footprint · click pixel to highlight matching session row'
+    if (subscriberImsi === VIP_HIGHWAY_IMSI) {
+      return 'VIP highway demo · KPI-colored samples along corridor (not one dot per connection)'
+    }
+    return 'KPI-colored journey samples · click to highlight session row'
   }, [mode, sessionTableCellFilter, subscriberImsi])
 
   useEffect(() => {
@@ -865,8 +1118,12 @@ export function OperatorMap({
         type: 'fill',
         source: CELL_SOURCE,
         paint: {
-          'fill-color': '#1d4ed8',
-          'fill-opacity': ['coalesce', ['get', 'opacity'], 0.2],
+          'fill-color': ['coalesce', ['get', 'cellFillColor'], '#1d4ed8'],
+          'fill-opacity': [
+            '*',
+            ['coalesce', ['get', 'opacity'], 0.2],
+            0.38,
+          ],
         },
       })
       map.addLayer({
@@ -897,7 +1154,7 @@ export function OperatorMap({
             'case',
             ['all', ['==', ['get', 'hasSelection'], 1], ['!=', ['get', 'selectedSession'], 1]],
             '#94a3b8',
-            PIXEL_KPI_COLOR_EXPR,
+            PIXEL_COLOR_EXPR,
           ],
           'circle-opacity': [
             'case',
@@ -905,7 +1162,7 @@ export function OperatorMap({
             0.98,
             ['==', ['get', 'hasSelection'], 1],
             0.24,
-            0.9,
+            ['match', ['get', 'kpiState'], 'breached', 0.82, 'nearBreach', 0.88, 0.94],
           ],
           'circle-stroke-width': [
             'case',
@@ -940,7 +1197,7 @@ export function OperatorMap({
             'case',
             ['all', ['==', ['get', 'hasSelection'], 1], ['!=', ['get', 'selectedSession'], 1]],
             '#94a3b8',
-            PIXEL_KPI_COLOR_EXPR,
+            PIXEL_COLOR_EXPR,
           ],
           'circle-opacity': [
             'case',
@@ -948,7 +1205,7 @@ export function OperatorMap({
             0.74,
             ['==', ['get', 'hasSelection'], 1],
             0.14,
-            0.3,
+            ['match', ['get', 'kpiState'], 'breached', 0.26, 'nearBreach', 0.3, 0.34],
           ],
           'circle-stroke-width': [
             'case',
@@ -956,7 +1213,7 @@ export function OperatorMap({
             2.2,
             0,
           ],
-          'circle-stroke-color': '#e2e8f0',
+          'circle-stroke-color': '#cbd5e1',
           'circle-stroke-opacity': [
             'case',
             ['boolean', ['feature-state', 'hover'], false],
@@ -1311,10 +1568,13 @@ export function OperatorMap({
           </div>
           {!legendCollapsed && (
             <>
+              {subscriberScopeNote ? (
+                <p className="map-legend-note map-legend-note--scope">{subscriberScopeNote}</p>
+              ) : null}
               <div className="map-legend-row">
                 <span
                   className="map-legend-swatch"
-                  style={{ backgroundColor: '#22c55e' }}
+                  style={{ backgroundColor: MAP_PERFORMANCE_COLORS.good }}
                   aria-hidden
                 />
                 <span className="map-legend-label">Good</span>
@@ -1323,7 +1583,16 @@ export function OperatorMap({
               <div className="map-legend-row">
                 <span
                   className="map-legend-swatch"
-                  style={{ backgroundColor: '#f59e0b' }}
+                  style={{ backgroundColor: MAP_PERFORMANCE_COLORS.fair }}
+                  aria-hidden
+                />
+                <span className="map-legend-label">Fair</span>
+                <span className="map-legend-value">Period B tint / neutral</span>
+              </div>
+              <div className="map-legend-row">
+                <span
+                  className="map-legend-swatch"
+                  style={{ backgroundColor: MAP_PERFORMANCE_COLORS.warning }}
                   aria-hidden
                 />
                 <span className="map-legend-label">Warning</span>
@@ -1332,7 +1601,7 @@ export function OperatorMap({
               <div className="map-legend-row">
                 <span
                   className="map-legend-swatch"
-                  style={{ backgroundColor: '#ef4444' }}
+                  style={{ backgroundColor: MAP_PERFORMANCE_COLORS.bad }}
                   aria-hidden
                 />
                 <span className="map-legend-label">Bad</span>
@@ -1364,7 +1633,9 @@ export function OperatorMap({
 
       <div className={`map-footer ${compact ? 'map-footer--embed' : ''}`}>
         <span className="map-legend">{legendText}</span>
-        {!compact && <span className="map-hint">Mapbox GL sources update in place via setData()</span>}
+        {!compact ? (
+          <span className="map-hint">Mapbox GL sources update in place via setData()</span>
+        ) : null}
       </div>
     </div>
   )

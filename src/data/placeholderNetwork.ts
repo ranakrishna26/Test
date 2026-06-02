@@ -74,6 +74,11 @@ export interface Subscriber {
 
 export interface SessionRow {
   id: string
+  /**
+   * ISO 8601 UTC start within the selected global time window (synthetic for demo data).
+   * Set on rows returned from getSessions().
+   */
+  sessionStart?: string
   signalQuality: number
   throughputMbps: number
   ulMbps: number
@@ -1387,25 +1392,82 @@ export function countHandoverEvents(sessions: SessionRow[]): number {
   return count
 }
 
+/** Width of the global filter time window in ms (synthetic “now” anchored). */
+export function sessionWindowDurationMs(
+  timeRange: string,
+  customStart: string,
+  customEnd: string,
+): number {
+  if (timeRange === 'custom' && customStart && customEnd) {
+    const a = new Date(`${customStart}T00:00:00.000Z`).getTime()
+    const b = new Date(`${customEnd}T23:59:59.999Z`).getTime()
+    if (Number.isFinite(a) && Number.isFinite(b) && b > a) return b - a
+  }
+  const map: Record<string, number> = {
+    '15m': 15 * 60 * 1000,
+    '1h': 60 * 60 * 1000,
+    '24h': 24 * 60 * 60 * 1000,
+    '7d': 7 * 24 * 60 * 60 * 1000,
+    '30d': 30 * 24 * 60 * 60 * 1000,
+  }
+  return map[timeRange] ?? map['24h']
+}
+
+/** Spread start times across the window (oldest = first row in list order). */
+export function attachSessionStartTimes(
+  sessions: SessionRow[],
+  f: SessionTimeFilters,
+): SessionRow[] {
+  const windowMs = sessionWindowDurationMs(
+    f.timeRange,
+    f.customTimeRangeStart,
+    f.customTimeRangeEnd,
+  )
+  const now = Date.now()
+  const windowStart = now - windowMs
+  const n = sessions.length
+  if (n === 0) return []
+  return sessions.map((session, i) => {
+    const t =
+      n === 1 ? windowStart + windowMs / 2 : windowStart + (windowMs * i) / (n - 1)
+    return { ...session, sessionStart: new Date(Math.floor(t)).toISOString() }
+  })
+}
+
+export function formatSessionStartLocal(iso: string | undefined): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })
+}
+
 export function getSessions(
   imsi: string,
   f: SessionTimeFilters = ALL_SUBSCRIBER_FILTERS,
 ): SessionRow[] {
   const all = sessionsForImsi(imsi)
-  if (imsi === VIP_HIGHWAY_IMSI) {
-    return sliceVipSessionsForTimeRange(
-      all,
-      f.timeRange,
-      f.customTimeRangeStart,
-      f.customTimeRangeEnd,
-    )
-  }
-  return sliceSessionsForTimeRange(
-    all,
-    f.timeRange,
-    f.customTimeRangeStart,
-    f.customTimeRangeEnd,
-  )
+  const sliced =
+    imsi === VIP_HIGHWAY_IMSI
+      ? sliceVipSessionsForTimeRange(
+          all,
+          f.timeRange,
+          f.customTimeRangeStart,
+          f.customTimeRangeEnd,
+        )
+      : sliceSessionsForTimeRange(
+          all,
+          f.timeRange,
+          f.customTimeRangeStart,
+          f.customTimeRangeEnd,
+        )
+  return attachSessionStartTimes(sliced, f)
 }
 
 export function subscriberFootprint(imsi: string): {

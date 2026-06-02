@@ -23,6 +23,7 @@ import {
   comparePeriodBLabel,
   computePeriodBKpiValueByKpi,
   formatKpiValue,
+  formatSessionStartLocal,
   getSessions,
   globalTimeRangeLabel,
   rankedCellsByKpi,
@@ -34,6 +35,7 @@ import {
   type ComparePeriodOption,
   type Cell as NetworkCell,
   type Subscriber as NetworkSubscriber,
+  type SubscriberDevice,
   type SubscriberGlobalFilters,
   type TableTab,
 } from '../../data/placeholderNetwork'
@@ -236,6 +238,443 @@ function CellDetailsPanel({ cell }: { cell: NetworkCell }) {
   )
 }
 
+function subscriberDeviceLabel(device: SubscriberDevice): string {
+  switch (device) {
+    case 'phone':
+      return 'Mobile handset'
+    case 'cpe':
+      return 'CPE / fixed wireless'
+    case 'module':
+      return 'IoT / embedded module'
+    default:
+      return device
+  }
+}
+
+type SessionDrillSection =
+  | 'serving_cell'
+  | 'neighbour_cells'
+  | 'signal_measurements'
+  | 'throughput'
+  | 'handover_events'
+  | 'device_model'
+  | 'failures'
+
+const DRILL_SECTION_BASE: SessionDrillSection[] = [
+  'serving_cell',
+  'neighbour_cells',
+  'signal_measurements',
+  'throughput',
+  'handover_events',
+  'device_model',
+  'failures',
+]
+
+const SESSION_SIGNAL_KPI_IDS: KpiId[] = [
+  'signal_rsrp',
+  'signal_rsrq',
+  'signal_disnr',
+  'signal_uisnr',
+  'signal_bler',
+  'signal_cqi',
+]
+
+const SESSION_FAILURES_QUALITY_KPI_IDS: KpiId[] = [
+  'connectivity_attach_success_pct',
+  'connectivity_nr_rrc_setup_success_pct',
+  'reliability_rlf_count',
+  'packet_ota_drops',
+  'packet_ota_delay_ms',
+]
+
+const SESSION_HANDOVER_KPI_IDS: KpiId[] = [
+  'reliability_5g_ho_success_pct',
+  'reliability_irat_hos',
+  'reliability_x2_xn1_setup_success_pct',
+]
+
+const SESSION_THROUGHPUT_KPI_IDS: KpiId[] = ['throughput_dl_mbps', 'throughput_ul_mbps']
+
+/** When set, section order follows this KPI id; otherwise order follows KPI category. */
+const SESSION_LENS_DRILL_ORDER = {
+  reliability_rlf_count: [
+    'failures',
+    'signal_measurements',
+    'serving_cell',
+    'neighbour_cells',
+    'handover_events',
+    'throughput',
+    'device_model',
+  ],
+  connectivity_attach_success_pct: [
+    'failures',
+    'serving_cell',
+    'signal_measurements',
+    'device_model',
+    'neighbour_cells',
+    'throughput',
+    'handover_events',
+  ],
+  connectivity_nr_rrc_setup_success_pct: [
+    'failures',
+    'device_model',
+    'serving_cell',
+    'signal_measurements',
+    'neighbour_cells',
+    'throughput',
+    'handover_events',
+  ],
+  packet_ota_drops: [
+    'failures',
+    'throughput',
+    'signal_measurements',
+    'handover_events',
+    'serving_cell',
+    'neighbour_cells',
+    'device_model',
+  ],
+  signal_bler: [
+    'signal_measurements',
+    'throughput',
+    'failures',
+    'neighbour_cells',
+    'serving_cell',
+    'handover_events',
+    'device_model',
+  ],
+} as const satisfies Partial<Record<KpiId, readonly SessionDrillSection[]>>
+
+function neighbourCellsForSession(session: SessionPoint): { id: string; name: string }[] {
+  const cell = cellById(session.cellId)
+  if (!cell?.neighborIds?.length) return []
+  return cell.neighborIds.map((id) => ({
+    id,
+    name: cellById(id)?.name ?? id,
+  }))
+}
+
+function mergeDrillSectionOrder(priority: SessionDrillSection[]): SessionDrillSection[] {
+  const seen = new Set<SessionDrillSection>()
+  const out: SessionDrillSection[] = []
+  for (const id of priority) {
+    if (!seen.has(id)) {
+      seen.add(id)
+      out.push(id)
+    }
+  }
+  for (const id of DRILL_SECTION_BASE) {
+    if (!seen.has(id)) {
+      seen.add(id)
+      out.push(id)
+    }
+  }
+  return out
+}
+
+function drillSectionOrderForLens(lensKpiId: KpiId): SessionDrillSection[] {
+  const orderByLens = SESSION_LENS_DRILL_ORDER as Partial<
+    Record<KpiId, readonly SessionDrillSection[]>
+  >
+  const explicit = orderByLens[lensKpiId]
+  if (explicit) return mergeDrillSectionOrder([...explicit])
+
+  const cat = KPI_BY_ID[lensKpiId].category
+  let priority: SessionDrillSection[]
+  switch (cat) {
+    case 'Throughput':
+      priority = [
+        'throughput',
+        'signal_measurements',
+        'neighbour_cells',
+        'serving_cell',
+        'handover_events',
+        'failures',
+        'device_model',
+      ]
+      break
+    case 'Signal':
+      priority = [
+        'signal_measurements',
+        'neighbour_cells',
+        'serving_cell',
+        'throughput',
+        'handover_events',
+        'failures',
+        'device_model',
+      ]
+      break
+    case 'Packet Transmission':
+      priority = [
+        'failures',
+        'throughput',
+        'signal_measurements',
+        'serving_cell',
+        'neighbour_cells',
+        'handover_events',
+        'device_model',
+      ]
+      break
+    case 'Reliability':
+      priority = [
+        'handover_events',
+        'failures',
+        'serving_cell',
+        'neighbour_cells',
+        'signal_measurements',
+        'throughput',
+        'device_model',
+      ]
+      break
+    case 'Connectivity':
+      priority = [
+        'failures',
+        'device_model',
+        'serving_cell',
+        'signal_measurements',
+        'throughput',
+        'neighbour_cells',
+        'handover_events',
+      ]
+      break
+    default:
+      return [...DRILL_SECTION_BASE]
+  }
+  return mergeDrillSectionOrder(priority)
+}
+
+function SessionDrillSectionBlock({
+  sectionId,
+  session,
+  subscriber,
+  lensKpiId,
+}: {
+  sectionId: SessionDrillSection
+  session: SessionPoint
+  subscriber: NetworkSubscriber | null
+  lensKpiId: KpiId
+}) {
+  switch (sectionId) {
+    case 'serving_cell': {
+      const sc = cellById(session.cellId)
+      return (
+        <section className="session-drill-block" aria-labelledby={`${session.id}-serving-h`}>
+          <h4 className="session-drill-block__title" id={`${session.id}-serving-h`}>
+            Serving cell
+          </h4>
+          <div className="session-drill-block__body">
+            <p className="session-drill-line">
+              <strong>{session.cellName}</strong>{' '}
+              <span className="mono">({session.cellId})</span>
+            </p>
+            {sc ? (
+              <p className="session-drill-line muted">
+                Site {sc.siteCode} · sector {sc.sector} · band {sc.band}
+              </p>
+            ) : null}
+          </div>
+        </section>
+      )
+    }
+    case 'neighbour_cells': {
+      const neighbours = neighbourCellsForSession(session)
+      return (
+        <section className="session-drill-block" aria-labelledby={`${session.id}-nei-h`}>
+          <h4 className="session-drill-block__title" id={`${session.id}-nei-h`}>
+            Neighbouring cells
+          </h4>
+          <div className="session-drill-block__body">
+            {neighbours.length === 0 ? (
+              <p className="session-drill-line muted">No neighbour list on the serving cell record.</p>
+            ) : (
+              <ul className="session-drill-list">
+                {neighbours.map((n) => (
+                  <li key={n.id}>
+                    <strong>{n.name}</strong> <span className="mono">({n.id})</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </section>
+      )
+    }
+    case 'signal_measurements':
+      return (
+        <section className="session-drill-block" aria-labelledby={`${session.id}-sig-h`}>
+          <h4 className="session-drill-block__title" id={`${session.id}-sig-h`}>
+            Signal measurements
+          </h4>
+          <div className="session-drill-block__body">
+            <p className="session-drill-line">
+              <strong>RF model score (session)</strong>: {session.signalQuality.toFixed(2)}
+            </p>
+            <dl className="session-drill-dl">
+              {SESSION_SIGNAL_KPI_IDS.filter((kpiId) => kpiId !== lensKpiId).map((kpiId) => (
+                <div key={kpiId} className="session-drill-dl__row">
+                  <dt>{KPI_BY_ID[kpiId].label}</dt>
+                  <dd className="mono">{formatKpiValue(kpiId, sessionKpiValue(session, kpiId))}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </section>
+      )
+    case 'throughput':
+      return (
+        <section className="session-drill-block" aria-labelledby={`${session.id}-tp-h`}>
+          <h4 className="session-drill-block__title" id={`${session.id}-tp-h`}>
+            Throughput
+          </h4>
+          <div className="session-drill-block__body">
+            <p className="session-drill-line">
+              <strong>Sample DL (session record)</strong>: {session.throughputMbps} Mbps
+            </p>
+            <p className="session-drill-line">
+              <strong>Sample UL (session record)</strong>: {session.ulMbps} Mbps
+            </p>
+            <dl className="session-drill-dl">
+              {SESSION_THROUGHPUT_KPI_IDS.filter((kpiId) => kpiId !== lensKpiId).map((kpiId) => (
+                <div key={kpiId} className="session-drill-dl__row">
+                  <dt>{KPI_BY_ID[kpiId].label}</dt>
+                  <dd className="mono">{formatKpiValue(kpiId, sessionKpiValue(session, kpiId))}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </section>
+      )
+    case 'handover_events':
+      return (
+        <section className="session-drill-block" aria-labelledby={`${session.id}-ho-h`}>
+          <h4 className="session-drill-block__title" id={`${session.id}-ho-h`}>
+            Handover events
+          </h4>
+          <div className="session-drill-block__body">
+            <p className="session-drill-line">
+              {session.handoverAttempted
+                ? session.handoverSuccess
+                  ? 'Handover was attempted during this session span and completed successfully.'
+                  : 'Handover was attempted during this session span and did not complete successfully.'
+                : 'No handover attempt is recorded for this session span (synthetic session record).'}
+            </p>
+            <dl className="session-drill-dl">
+              {SESSION_HANDOVER_KPI_IDS.filter((kpiId) => kpiId !== lensKpiId).map((kpiId) => (
+                <div key={kpiId} className="session-drill-dl__row">
+                  <dt>{KPI_BY_ID[kpiId].label}</dt>
+                  <dd className="mono">{formatKpiValue(kpiId, sessionKpiValue(session, kpiId))}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </section>
+      )
+    case 'device_model':
+      return (
+        <section className="session-drill-block" aria-labelledby={`${session.id}-dev-h`}>
+          <h4 className="session-drill-block__title" id={`${session.id}-dev-h`}>
+            Device
+          </h4>
+          <div className="session-drill-block__body">
+            {subscriber ? (
+              <>
+                <p className="session-drill-line">
+                  <strong>Form factor</strong>: {subscriberDeviceLabel(subscriber.device)}
+                </p>
+                <p className="session-drill-line muted">
+                  {subscriber.technology.toUpperCase()} {subscriber.mode.toUpperCase()} · {subscriber.service}{' '}
+                  service · {subscriber.segment} subscriber
+                </p>
+              </>
+            ) : (
+              <p className="session-drill-line muted">Subscriber profile not loaded for this session.</p>
+            )}
+          </div>
+        </section>
+      )
+    case 'failures':
+      return (
+        <section className="session-drill-block" aria-labelledby={`${session.id}-fail-h`}>
+          <h4 className="session-drill-block__title" id={`${session.id}-fail-h`}>
+            Failures &amp; quality
+          </h4>
+          <div className="session-drill-block__body">
+            <dl className="session-drill-dl">
+              <div className="session-drill-dl__row">
+                <dt>Setup / access failures (attrib.)</dt>
+                <dd className="mono">{session.setupAccessFailures}</dd>
+              </div>
+              <div className="session-drill-dl__row">
+                <dt>Call-drop-like outcomes</dt>
+                <dd className="mono">{session.callDrops}</dd>
+              </div>
+              <div className="session-drill-dl__row">
+                <dt>Connectivity class</dt>
+                <dd>{session.connectivity}</dd>
+              </div>
+              <div className="session-drill-dl__row">
+                <dt>Packet loss (session record)</dt>
+                <dd className="mono">{session.packetLossPct.toFixed(2)}%</dd>
+              </div>
+              {SESSION_FAILURES_QUALITY_KPI_IDS.filter((kpiId) => kpiId !== lensKpiId).map((kpiId) => (
+                <div key={kpiId} className="session-drill-dl__row">
+                  <dt>{KPI_BY_ID[kpiId].label}</dt>
+                  <dd className="mono">{formatKpiValue(kpiId, sessionKpiValue(session, kpiId))}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </section>
+      )
+    default:
+      return null
+  }
+}
+
+function SessionDetailsPanel({
+  session,
+  lensKpiId,
+  subscriber,
+}: {
+  session: SessionPoint
+  lensKpiId: KpiId
+  subscriber: NetworkSubscriber | null
+}) {
+  const order = useMemo(() => drillSectionOrderForLens(lensKpiId), [lensKpiId])
+  const lensLabel = KPI_BY_ID[lensKpiId].label
+  const lensValue = sessionKpiValue(session, lensKpiId)
+
+  return (
+    <div
+      className="session-details-panel session-details-panel--drill"
+      role="region"
+      aria-label={`Session drill-down for ${session.id}`}
+    >
+      <header className="session-drill-header">
+        <span className="session-drill-header__eyebrow">Global KPI lens</span>
+        <div className="session-drill-header__main">
+          <span className="session-drill-header__label">{lensLabel}</span>
+          <span className="session-drill-header__value mono">{formatKpiValue(lensKpiId, lensValue)}</span>
+        </div>
+        <p className="session-drill-header__hint">
+          Blocks below are ordered so the most relevant context appears first. The lens metric is hidden from
+          lists where it would repeat this summary.
+        </p>
+      </header>
+      <div className="session-drill-sections">
+        {order.map((sectionId) => (
+          <SessionDrillSectionBlock
+            key={sectionId}
+            sectionId={sectionId}
+            session={session}
+            subscriber={subscriber}
+            lensKpiId={lensKpiId}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function SubscriberDetailsPanel({ subscriber }: { subscriber: NetworkSubscriber }) {
   const anchor = cellById(subscriber.cellId)
   return (
@@ -378,6 +817,7 @@ export function OperatorDashboard() {
   const [sessionSelectionAnchorId, setSessionSelectionAnchorId] = useState<string | null>(null)
   const [expandedCellIds, setExpandedCellIds] = useState<Set<string>>(() => new Set())
   const [expandedSubscriberIds, setExpandedSubscriberIds] = useState<Set<string>>(() => new Set())
+  const [expandedSessionIds, setExpandedSessionIds] = useState<Set<string>>(() => new Set())
   const [tableImsiSearch, setTableImsiSearch] = useState('')
 
   const [comparePeriodB, setComparePeriodB] = useState<ComparePeriodOption>('7d')
@@ -440,6 +880,11 @@ export function OperatorDashboard() {
     () => (selectedImsi ? getSessions(selectedImsi, subscriberGlobalFilters) : []),
     [selectedImsi, subscriberGlobalFilters],
   )
+
+  const sessionDrillSubscriber = useMemo(() => {
+    if (!selectedImsi) return null
+    return SUBSCRIBERS.find((s) => s.imsi === selectedImsi) ?? null
+  }, [selectedImsi])
 
   const sessions = useMemo(() => {
     if (!sessionCellFilter) return allSessionsForSubscriber
@@ -685,6 +1130,7 @@ export function OperatorDashboard() {
       setSessionCellFilter(cellId)
       setSelectedSessionIds([])
       setSessionSelectionAnchorId(null)
+      setExpandedSessionIds(new Set())
       return
     }
     setSessionCellFilter(null)
@@ -698,6 +1144,7 @@ export function OperatorDashboard() {
       setSessionCellFilter(null)
       setSelectedSessionIds([])
       setSessionSelectionAnchorId(null)
+      setExpandedSessionIds(new Set())
     }
   }
 
@@ -707,6 +1154,7 @@ export function OperatorDashboard() {
     setSessionCellFilter(null)
     setSelectedSessionIds([])
     setSessionSelectionAnchorId(null)
+    setExpandedSessionIds(new Set())
     setView('subscribers')
   }
 
@@ -717,6 +1165,7 @@ export function OperatorDashboard() {
     setSessionCellFilter(null)
     setSelectedSessionIds([])
     setSessionSelectionAnchorId(null)
+    setExpandedSessionIds(new Set())
     setTableImsiSearch('')
   }
 
@@ -726,6 +1175,7 @@ export function OperatorDashboard() {
     setSessionCellFilter(null)
     setSelectedSessionIds([])
     setSessionSelectionAnchorId(null)
+    setExpandedSessionIds(new Set())
   }
 
   function openSubscriber(imsi: string) {
@@ -733,6 +1183,7 @@ export function OperatorDashboard() {
     setSessionCellFilter(null)
     setSelectedSessionIds([])
     setSessionSelectionAnchorId(null)
+    setExpandedSessionIds(new Set())
     setView('sessions')
   }
 
@@ -742,6 +1193,7 @@ export function OperatorDashboard() {
     setSessionCellFilter(null)
     setSelectedSessionIds([])
     setSessionSelectionAnchorId(null)
+    setExpandedSessionIds(new Set())
     setView('sessions')
   }
 
@@ -754,6 +1206,7 @@ export function OperatorDashboard() {
     setSelectedSessionIds([])
     setSessionSelectionAnchorId(null)
     setExpandedSubscriberIds(new Set())
+    setExpandedSessionIds(new Set())
   }
 
   function selectSingleSession(sessionId: string) {
@@ -808,6 +1261,15 @@ export function OperatorDashboard() {
       const next = new Set(prev)
       if (next.has(imsi)) next.delete(imsi)
       else next.add(imsi)
+      return next
+    })
+  }
+
+  function toggleSessionDetails(sessionId: string) {
+    setExpandedSessionIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(sessionId)) next.delete(sessionId)
+      else next.add(sessionId)
       return next
     })
   }
@@ -1219,9 +1681,11 @@ export function OperatorDashboard() {
             {view === 'sessions' && selectedImsi && (
               <>
                 <p className="context-line">
-                  Session list and charts for the subscriber above. Map cell click filters rows;
-                  empty map clears the filter. Map points are KPI visualization samples (see map
-                  legend), not one dot per network attachment.
+                  Session list for the subscriber above: row click selects sessions for map highlights and chart
+                  overlays (Shift for range). The <strong>Details</strong> column expands serving cell, neighbours,
+                  signal, throughput, handover context, device profile, and failure-related fields—order follows the
+                  selected global KPI category. Map cell click filters rows; empty map clears the filter. Map
+                  points are KPI visualization samples (see map legend), not one dot per network attachment.
                 </p>
                 {subscriberSessionScopeNote(selectedImsi, timeRange, sessions.length) ? (
                   <p className="context-line context-line--scope" role="note">
@@ -1235,44 +1699,70 @@ export function OperatorDashboard() {
                     {sessionCellFilter}). Click empty map area to show all sessions.
                   </p>
                 )}
-                <div className="table-scroll">
+                <div className="table-scroll table-scroll--session-table">
                   <table className="minimal-table session-table">
                     <thead>
                       <tr>
+                        <th className="row-expand-col" aria-label="Expand session engineering details" />
                         <th>Session ID</th>
-                        <th>Cell</th>
-                        <th>Signal quality</th>
-                        <th>Throughput</th>
-                        <th>Connectivity</th>
+                        <th>Start time</th>
                         <th>{selectedKpiMeta.label}</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {sessions.map((s, i) => (
-                        <tr
-                          key={s.id}
-                          className={
-                            [
-                              sessionCellFilter && s.cellId === sessionCellFilter
-                                ? 'session-row--cell-focus'
-                                : '',
-                              selectedSessionIdSet.has(s.id) ? 'session-row--selected' : '',
-                            ]
-                              .filter(Boolean)
-                              .join(' ') || undefined
-                          }
-                          onClick={(e) => selectSessionFromTable(s.id, i, e.shiftKey)}
-                        >
-                          <td className="mono">{s.id}</td>
-                          <td className="muted">
-                            {s.cellName} <span className="mono">({s.cellId})</span>
-                          </td>
-                          <td>{s.signalQuality.toFixed(2)}</td>
-                          <td>{s.throughputMbps} Mbps</td>
-                          <td>{s.connectivity}</td>
-                          <td>{formatKpiValue(selectedKpiId, sessionKpiValue(s, selectedKpiId))}</td>
-                        </tr>
-                      ))}
+                      {sessions.map((s, i) => {
+                        const isExpanded = expandedSessionIds.has(s.id)
+                        return (
+                          <Fragment key={s.id}>
+                            <tr
+                              className={
+                                [
+                                  sessionCellFilter && s.cellId === sessionCellFilter
+                                    ? 'session-row--cell-focus'
+                                    : '',
+                                  selectedSessionIdSet.has(s.id) ? 'session-row--selected' : '',
+                                ]
+                                  .filter(Boolean)
+                                  .join(' ') || undefined
+                              }
+                              onClick={(e) => selectSessionFromTable(s.id, i, e.shiftKey)}
+                            >
+                              <td className="row-expand-col">
+                                <button
+                                  type="button"
+                                  className="row-expand-btn"
+                                  aria-label={`${isExpanded ? 'Collapse' : 'Expand'} engineering details for session ${s.id}`}
+                                  aria-expanded={isExpanded}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    const opening = !expandedSessionIds.has(s.id)
+                                    toggleSessionDetails(s.id)
+                                    if (opening) selectSingleSession(s.id)
+                                  }}
+                                >
+                                  {isExpanded ? '▾' : '▸'}
+                                </button>
+                              </td>
+                              <td className="mono">{s.id}</td>
+                              <td className="mono session-start-cell">
+                                {formatSessionStartLocal(s.sessionStart)}
+                              </td>
+                              <td>{formatKpiValue(selectedKpiId, sessionKpiValue(s, selectedKpiId))}</td>
+                            </tr>
+                            {isExpanded && (
+                              <tr className="session-details-row">
+                                <td colSpan={4}>
+                                  <SessionDetailsPanel
+                                    session={s}
+                                    lensKpiId={selectedKpiId}
+                                    subscriber={sessionDrillSubscriber}
+                                  />
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>

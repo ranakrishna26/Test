@@ -18,7 +18,6 @@ import {
   subscribersForFootprint,
   subscriberCellKpiBand,
   subscriberFootprint,
-  subscriberSessionScopeNote,
   type Cell,
   type KpiStateBand,
   type SessionRow,
@@ -226,7 +225,6 @@ function buildPixelHoverTooltipHtml(
     `<li>${escapeHtml(cellName)} <span class="map-hover-muted">(${escapeHtml(cellId || 'n/a')})</span></li>`,
     `<li>Period ${escapeHtml(period)} · session <span class="map-hover-code">${escapeHtml(sessionId || 'n/a')}</span></li>`,
     `<li>Subscriber · <span class="map-hover-code">${escapeHtml(imsi || 'n/a')}</span></li>`,
-    '<li class="map-hover-hint">Click to select session in the table</li>',
     '</ul>',
   ].join('')
 }
@@ -887,7 +885,7 @@ export function OperatorMap({
   sessions,
   selectedSessionIds = [],
   onSessionSelect,
-  sessionTableCellFilter,
+  sessionTableCellFilter: _sessionTableCellFilter,
   showHoverKpis: _showHoverKpis,
   embed = 'full',
   subscriberGlobalFilters,
@@ -895,9 +893,17 @@ export function OperatorMap({
   onMapBackgroundClick,
 }: Props) {
   void _showHoverKpis
+  void _sessionTableCellFilter
   const compact = embed === 'compact'
   const selectedSessionIdSet = useMemo(() => new Set(selectedSessionIds), [selectedSessionIds])
   const filters = subscriberGlobalFilters ?? ALL_SUBSCRIBER_FILTERS
+  /** Parent passes inline handlers; keep refs so the map mount effect does not re-run every render. */
+  const onCellSelectRef = useRef(onCellSelect)
+  const onMapBackgroundClickRef = useRef(onMapBackgroundClick)
+  const onSessionSelectRef = useRef(onSessionSelect)
+  onCellSelectRef.current = onCellSelect
+  onMapBackgroundClickRef.current = onMapBackgroundClick
+  onSessionSelectRef.current = onSessionSelect
   const mapRef = useRef<mapboxgl.Map | null>(null)
   const mapElRef = useRef<HTMLDivElement>(null)
   const popupRef = useRef<mapboxgl.Popup | null>(null)
@@ -1041,13 +1047,6 @@ export function OperatorMap({
     pixelDisplayMode,
   ])
 
-  const subscriberScopeNote = useMemo(() => {
-    if (mode !== 'subscriberFocus' || !subscriberImsi || !sessions.length) {
-      return null
-    }
-    return subscriberSessionScopeNote(subscriberImsi, filters.timeRange, sessions.length)
-  }, [mode, subscriberImsi, sessions.length, filters.timeRange])
-
   const selectedPeriodAPoints = useMemo(
     () =>
       pixelCollection.features.filter(
@@ -1055,18 +1054,6 @@ export function OperatorMap({
       ),
     [pixelCollection, selectedSessionIdSet],
   )
-
-  const legendText = useMemo(() => {
-    if (mode === 'all') return 'All sectors · click a cell or table row to open subscribers'
-    if (mode === 'cellFocus')
-      return 'Blue = selected · gray = neighbour · faded = other · map and table are synced'
-    if (sessionTableCellFilter)
-      return 'Subscriber footprint · click cell to filter sessions · click empty map for all sessions'
-    if (subscriberImsi === VIP_HIGHWAY_IMSI) {
-      return 'VIP highway demo · KPI-colored samples along corridor (not one dot per connection)'
-    }
-    return 'KPI-colored journey samples · click to highlight session row'
-  }, [mode, sessionTableCellFilter, subscriberImsi])
 
   useEffect(() => {
     if (!mapElRef.current || mapRef.current) return
@@ -1297,7 +1284,7 @@ export function OperatorMap({
         pixelHoverPopupRef.current?.remove()
         clearPixelHoverState()
         const sessionId = String(f.properties?.sessionId ?? '')
-        if (sessionId) onSessionSelect?.(sessionId)
+        if (sessionId) onSessionSelectRef.current?.(sessionId)
         pixelPopupRef.current
           .setLngLat(e.lngLat)
           .setHTML(buildPixelHoverTooltipHtml(f, selectedKpiIdRef.current))
@@ -1322,7 +1309,7 @@ export function OperatorMap({
         pixelPopupRef.current?.remove()
         pixelHoverPopupRef.current?.remove()
         clearPixelHoverState()
-        if (id) onCellSelect?.(id)
+        if (id) onCellSelectRef.current?.(id)
       })
 
       map.on('mouseenter', PIXEL_A_LAYER, () => {
@@ -1346,10 +1333,14 @@ export function OperatorMap({
           pixelPopupRef.current?.remove()
           pixelHoverPopupRef.current?.remove()
           clearPixelHoverState()
-          onMapBackgroundClick?.()
+          onMapBackgroundClickRef.current?.()
         }
       })
 
+      map.resize()
+      requestAnimationFrame(() => {
+        map.resize()
+      })
       setMapReady(true)
     })
 
@@ -1373,7 +1364,27 @@ export function OperatorMap({
       mapRef.current = null
       setMapReady(false)
     }
-  }, [onCellSelect, onMapBackgroundClick, onSessionSelect])
+  }, [])
+
+  useEffect(() => {
+    if (!mapReady || !mapRef.current || !mapElRef.current) return
+    const map = mapRef.current
+    const el = mapElRef.current
+    const scheduleResize = () => {
+      map.resize()
+      requestAnimationFrame(() => map.resize())
+    }
+    scheduleResize()
+    const ro = new ResizeObserver(() => {
+      scheduleResize()
+    })
+    ro.observe(el)
+    window.addEventListener('resize', scheduleResize)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', scheduleResize)
+    }
+  }, [mapReady, compact])
 
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
@@ -1568,9 +1579,6 @@ export function OperatorMap({
           </div>
           {!legendCollapsed && (
             <>
-              {subscriberScopeNote ? (
-                <p className="map-legend-note map-legend-note--scope">{subscriberScopeNote}</p>
-              ) : null}
               <div className="map-legend-row">
                 <span
                   className="map-legend-swatch"
@@ -1629,13 +1637,6 @@ export function OperatorMap({
             </>
           )}
         </div>
-      </div>
-
-      <div className={`map-footer ${compact ? 'map-footer--embed' : ''}`}>
-        <span className="map-legend">{legendText}</span>
-        {!compact ? (
-          <span className="map-hint">Mapbox GL sources update in place via setData()</span>
-        ) : null}
       </div>
     </div>
   )

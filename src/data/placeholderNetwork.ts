@@ -42,7 +42,6 @@ export interface Cell {
 
 export type SubscriberSegment = 'consumer' | 'enterprise' | 'iot' | 'vip'
 export type SubscriberDevice = 'phone' | 'cpe' | 'module'
-export type SubscriberTimeHorizon = '15m' | '1h' | '24h' | '7d' | '30d'
 export type SubscriberTechnology = '4g' | '5g'
 export type SubscriberService = 'data' | 'voice' | 'messaging' | 'iot'
 export type SubscriberMode = 'sa' | 'nsa'
@@ -68,8 +67,6 @@ export interface Subscriber {
   service: SubscriberService
   /** Global quick filter: 5G deployment mode */
   mode: SubscriberMode
-  /** Metrics visible when selected time range is at least this long (synthetic). */
-  timeHorizon: SubscriberTimeHorizon
 }
 
 export interface SessionRow {
@@ -79,6 +76,8 @@ export interface SessionRow {
    * Set on rows returned from getSessions().
    */
   sessionStart?: string
+  /** Wall-clock span for the synthetic session record (set in attachSessionStartTimes). */
+  durationMs?: number
   signalQuality: number
   throughputMbps: number
   ulMbps: number
@@ -506,14 +505,6 @@ function pickDevice(u: number, segment: SubscriberSegment): SubscriberDevice {
   return 'module'
 }
 
-function pickTimeHorizon(u: number): SubscriberTimeHorizon {
-  if (u < 0.06) return '15m'
-  if (u < 0.2) return '1h'
-  if (u < 0.58) return '24h'
-  if (u < 0.82) return '7d'
-  return '30d'
-}
-
 function pickTechnology(u: number, segment: SubscriberSegment): SubscriberTechnology {
   if (segment === 'vip') return u < 0.9 ? '5g' : '4g'
   if (segment === 'enterprise') return u < 0.72 ? '5g' : '4g'
@@ -546,25 +537,15 @@ function buildPlaceholderSubscribers(): Subscriber[] {
       const seed = mix32(seq * 2654435761 ^ cellIdSalt(cell.id) ^ slot * 2246822519)
       const u0 = (seed >>> 0) / 2 ** 32
       const u1 = mix32(seed + 1) / 2 ** 32
-      const u2 = mix32(seed + 2) / 2 ** 32
       const u3 = mix32(seed + 3) / 2 ** 32
       const u4 = mix32(seed + 4) / 2 ** 32
       const u5 = mix32(seed + 5) / 2 ** 32
 
       const segment = pickSegment(u0)
       const device = pickDevice(u1, segment)
-      let timeHorizon = pickTimeHorizon(u2)
       const technology = pickTechnology(mix32(seed + 7) / 2 ** 32, segment)
       const service = pickService(mix32(seed + 8) / 2 ** 32, segment, device)
       const mode = pickMode(mix32(seed + 9) / 2 ** 32, technology)
-      if (segment === 'vip') {
-        const ut = mix32(seed + 6) / 2 ** 32
-        if (ut < 0.14) timeHorizon = '15m'
-        else if (ut < 0.54) timeHorizon = '24h'
-        else if (ut < 0.82) timeHorizon = '7d'
-        else if (ut < 0.94) timeHorizon = '30d'
-        else timeHorizon = '1h'
-      }
 
       const dlFactor = 0.48 + u3 * 0.52
       let dlMbps = Math.round(cell.dlMbps * dlFactor * 10) / 10
@@ -622,7 +603,6 @@ function buildPlaceholderSubscribers(): Subscriber[] {
         technology,
         service,
         mode,
-        timeHorizon,
       })
     }
   }
@@ -643,7 +623,6 @@ function buildPlaceholderSubscribers(): Subscriber[] {
       technology: '5g',
       service: 'data',
       mode: 'sa',
-      timeHorizon: '15m',
     }
   }
   return out
@@ -657,14 +636,6 @@ export function subscribersForFootprint(cellId: string): Subscriber[] {
   return SUBSCRIBERS.filter((s) => footprint.has(s.cellId))
 }
 
-const TIME_RANGE_ORDER: Record<SubscriberTimeHorizon, number> = {
-  '15m': 1,
-  '1h': 2,
-  '24h': 3,
-  '7d': 4,
-  '30d': 5,
-}
-
 function customRangeSpanDays(start: string, end: string): number {
   if (!start || !end) return 30
   const startMs = new Date(start).getTime()
@@ -673,26 +644,11 @@ function customRangeSpanDays(start: string, end: string): number {
   return Math.max(1, Math.round((endMs - startMs) / 86400000) + 1)
 }
 
-function customRangeToTimeRange(start: string, end: string): SubscriberTimeHorizon {
+function customRangeToTimeRange(start: string, end: string): '24h' | '7d' | '30d' {
   const days = customRangeSpanDays(start, end)
   if (days <= 1) return '24h'
   if (days <= 7) return '7d'
   return '30d'
-}
-
-function timeRangeCoversSubscriber(
-  selected: string,
-  sub: SubscriberTimeHorizon,
-  customStart: string,
-  customEnd: string,
-): boolean {
-  if (selected === 'custom') {
-    const derived = customRangeToTimeRange(customStart, customEnd)
-    return TIME_RANGE_ORDER[derived] >= TIME_RANGE_ORDER[sub]
-  }
-  const oSel = TIME_RANGE_ORDER[selected as SubscriberTimeHorizon] ?? 3
-  const oSub = TIME_RANGE_ORDER[sub]
-  return oSel >= oSub
 }
 
 /** Same rules as cell table / subscriber drill-down (excludes IMSI search). */
@@ -704,16 +660,6 @@ export function applyGlobalSubscriberFilters(
     if (f.service !== 'all' && s.service !== f.service) return false
     if (f.networkMode !== 'all' && s.mode !== f.networkMode) return false
     if (f.subscriberType !== 'all' && s.segment !== f.subscriberType) return false
-    if (
-      !timeRangeCoversSubscriber(
-        f.timeRange,
-        s.timeHorizon,
-        f.customTimeRangeStart,
-        f.customTimeRangeEnd,
-      )
-    ) {
-      return false
-    }
     return true
   })
 }
@@ -1413,6 +1359,60 @@ export function sessionWindowDurationMs(
   return map[timeRange] ?? map['24h']
 }
 
+/** Deterministic [0, 1) fingerprint for synthetic session fields (varies per row). */
+function sessionFieldFingerprint(session: SessionRow, index: number): number {
+  const parts = [
+    session.id,
+    session.cellId,
+    String(index),
+    String(session.throughputMbps),
+    String(session.signalQuality),
+    session.connectivity,
+    String(session.setupAccessFailures),
+    String(session.callDrops),
+  ]
+  let h = 2166136261
+  for (const part of parts) {
+    for (let i = 0; i < part.length; i += 1) {
+      h ^= part.charCodeAt(i)
+      h = Math.imul(h, 16777619)
+    }
+  }
+  return (h >>> 0) / 2 ** 32
+}
+
+/**
+ * Plausible per-session duration for demo tables: depends on filter window, row index,
+ * RF/throughput context, and connectivity (not a single global modulo of id only).
+ */
+function realisticSessionDurationMs(
+  session: SessionRow,
+  index: number,
+  count: number,
+  windowMs: number,
+): number {
+  const u = sessionFieldFingerprint(session, index)
+  const v = sessionFieldFingerprint(session, index + 13) // second uncorrelated draw
+  const maxCap = Math.min(Math.max(windowMs * 0.42, 3 * 60 * 1000), 6 * 60 * 60 * 1000)
+  const minDur = 35 * 1000
+  const shaped = Math.pow(u, 0.72) * 0.92 + v * 0.08
+
+  const c = session.connectivity.toLowerCase()
+  let qualityStretch = 0.88 + v * 0.28
+  if (c.includes('intermittent')) qualityStretch = 0.38 + u * 0.42
+  else if (c.includes('degraded')) qualityStretch = 0.52 + v * 0.38
+
+  let hoFactor = 1
+  if (session.handoverAttempted && !session.handoverSuccess) hoFactor = 0.48 + v * 0.22
+  else if (session.handoverAttempted) hoFactor = 0.68 + u * 0.18
+
+  const indexJitter = 0.82 + ((index * 31 + count * 7) % 37) / 100
+
+  let ms = minDur + shaped * (maxCap - minDur) * qualityStretch * hoFactor * indexJitter
+  ms = Math.round(ms / 1000) * 1000
+  return Math.max(minDur, Math.min(ms, maxCap))
+}
+
 /** Spread start times across the window (oldest = first row in list order). */
 export function attachSessionStartTimes(
   sessions: SessionRow[],
@@ -1430,7 +1430,11 @@ export function attachSessionStartTimes(
   return sessions.map((session, i) => {
     const t =
       n === 1 ? windowStart + windowMs / 2 : windowStart + (windowMs * i) / (n - 1)
-    return { ...session, sessionStart: new Date(Math.floor(t)).toISOString() }
+    return {
+      ...session,
+      sessionStart: new Date(Math.floor(t)).toISOString(),
+      durationMs: realisticSessionDurationMs(session, i, n, windowMs),
+    }
   })
 }
 
@@ -1446,6 +1450,18 @@ export function formatSessionStartLocal(iso: string | undefined): string {
     second: '2-digit',
     hour12: false,
   })
+}
+
+/** Human-readable duration for session list (synthetic demo span). */
+export function formatSessionDuration(durationMs: number | undefined): string {
+  if (durationMs == null || !Number.isFinite(durationMs) || durationMs < 0) return '—'
+  const totalSec = Math.floor(durationMs / 1000)
+  const h = Math.floor(totalSec / 3600)
+  const m = Math.floor((totalSec % 3600) / 60)
+  const s = totalSec % 60
+  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`
+  if (m > 0) return s > 0 ? `${m}m ${s}s` : `${m}m`
+  return `${s}s`
 }
 
 export function getSessions(
@@ -1612,7 +1628,7 @@ export function mapCellSummaryLines(
         `Selected KPI · ${kpiDefinition(selectedKpiId).label}: ${formatKpiValue(
           selectedKpiId,
           cellKpiValue(c, f, selectedKpiId),
-        )} (cohort)`,
+        )}`,
       )
       if (scopedSessions && scopedSessions.length > 0) {
         lines.push('This subscriber · no sessions on this cell in the current window')

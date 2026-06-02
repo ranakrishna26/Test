@@ -121,7 +121,7 @@ export const KPI_DEFINITIONS = [
   },
   {
     id: 'signal_disnr',
-    label: 'dISNR',
+    label: 'DL SINR',
     category: 'Signal',
     unit: 'dB',
     direction: 'higher_is_better',
@@ -130,7 +130,7 @@ export const KPI_DEFINITIONS = [
   },
   {
     id: 'signal_uisnr',
-    label: 'uISNR',
+    label: 'UL SINR',
     category: 'Signal',
     unit: 'dB',
     direction: 'higher_is_better',

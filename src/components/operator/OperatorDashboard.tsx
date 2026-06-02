@@ -23,11 +23,11 @@ import {
   comparePeriodBLabel,
   computePeriodBKpiValueByKpi,
   formatKpiValue,
+  formatSessionDuration,
   formatSessionStartLocal,
   getSessions,
   globalTimeRangeLabel,
   rankedCellsByKpi,
-  subscriberSessionScopeNote,
   sessionKpiValue,
   sortSubscribersByKpi,
   subscriberKpiValue,
@@ -49,6 +49,7 @@ import {
   type GlobalFilterSnapshot,
   type SavedFilterPreset,
 } from '../../utils/filterPresets'
+import { correlatedKpiIdsForLens, correlatedSessionSummary } from '../../data/kpiCorrelations'
 import {
   KPI_BY_ID,
   kpiDistributionBins,
@@ -71,6 +72,13 @@ const CELL_FOCUS_SCATTER_MAX_POINTS = 320
 const CELL_FOCUS_COMPARISON_MAX_SESSIONS = 2500
 
 type SessionPoint = ReturnType<typeof getSessions>[number]
+
+/** Default session table: connectivity is degraded or intermittent only (stable rows need Show all sessions). */
+function sessionPassesStressTableFilter(session: SessionPoint): boolean {
+  const c = session.connectivity.toLowerCase()
+  return c.includes('intermittent') || c.includes('degraded')
+}
+
 type TrendDatum = {
   i: number
   tp: number
@@ -174,21 +182,6 @@ function matchImsi(q: string, imsi: string): boolean {
   return imsi.replace(/\s/g, '').toLowerCase().includes(n)
 }
 
-function cellTableFootprintHint(tab: TableTab): string {
-  switch (tab) {
-    case 'failure':
-      return 'Same filtered footprint as the subscriber list (this cell and neighbours; global filters on the bar). Subscriber search only filters the subscriber table.'
-    case 'callDrop':
-      return 'Same filtered footprint as the subscriber list (this cell and neighbours; global filters on the bar). Subscriber search only filters the subscriber table.'
-    case 'payload':
-      return 'Rows match the subscriber drill-down footprint (this cell and neighbours; global filters). Subscriber search only filters the subscriber table.'
-    case 'handover':
-      return 'Rows match the subscriber drill-down footprint (this cell and neighbours; global filters). Subscriber search only filters the subscriber table.'
-    default:
-      return ''
-  }
-}
-
 function cellDetailColSpan(tab: TableTab): number {
   switch (tab) {
     case 'handover':
@@ -251,430 +244,6 @@ function subscriberDeviceLabel(device: SubscriberDevice): string {
   }
 }
 
-type SessionDrillSection =
-  | 'serving_cell'
-  | 'neighbour_cells'
-  | 'signal_measurements'
-  | 'throughput'
-  | 'handover_events'
-  | 'device_model'
-  | 'failures'
-
-const DRILL_SECTION_BASE: SessionDrillSection[] = [
-  'serving_cell',
-  'neighbour_cells',
-  'signal_measurements',
-  'throughput',
-  'handover_events',
-  'device_model',
-  'failures',
-]
-
-const SESSION_SIGNAL_KPI_IDS: KpiId[] = [
-  'signal_rsrp',
-  'signal_rsrq',
-  'signal_disnr',
-  'signal_uisnr',
-  'signal_bler',
-  'signal_cqi',
-]
-
-const SESSION_FAILURES_QUALITY_KPI_IDS: KpiId[] = [
-  'connectivity_attach_success_pct',
-  'connectivity_nr_rrc_setup_success_pct',
-  'reliability_rlf_count',
-  'packet_ota_drops',
-  'packet_ota_delay_ms',
-]
-
-const SESSION_HANDOVER_KPI_IDS: KpiId[] = [
-  'reliability_5g_ho_success_pct',
-  'reliability_irat_hos',
-  'reliability_x2_xn1_setup_success_pct',
-]
-
-const SESSION_THROUGHPUT_KPI_IDS: KpiId[] = ['throughput_dl_mbps', 'throughput_ul_mbps']
-
-/** When set, section order follows this KPI id; otherwise order follows KPI category. */
-const SESSION_LENS_DRILL_ORDER = {
-  reliability_rlf_count: [
-    'failures',
-    'signal_measurements',
-    'serving_cell',
-    'neighbour_cells',
-    'handover_events',
-    'throughput',
-    'device_model',
-  ],
-  connectivity_attach_success_pct: [
-    'failures',
-    'serving_cell',
-    'signal_measurements',
-    'device_model',
-    'neighbour_cells',
-    'throughput',
-    'handover_events',
-  ],
-  connectivity_nr_rrc_setup_success_pct: [
-    'failures',
-    'device_model',
-    'serving_cell',
-    'signal_measurements',
-    'neighbour_cells',
-    'throughput',
-    'handover_events',
-  ],
-  packet_ota_drops: [
-    'failures',
-    'throughput',
-    'signal_measurements',
-    'handover_events',
-    'serving_cell',
-    'neighbour_cells',
-    'device_model',
-  ],
-  signal_bler: [
-    'signal_measurements',
-    'throughput',
-    'failures',
-    'neighbour_cells',
-    'serving_cell',
-    'handover_events',
-    'device_model',
-  ],
-} as const satisfies Partial<Record<KpiId, readonly SessionDrillSection[]>>
-
-function neighbourCellsForSession(session: SessionPoint): { id: string; name: string }[] {
-  const cell = cellById(session.cellId)
-  if (!cell?.neighborIds?.length) return []
-  return cell.neighborIds.map((id) => ({
-    id,
-    name: cellById(id)?.name ?? id,
-  }))
-}
-
-function mergeDrillSectionOrder(priority: SessionDrillSection[]): SessionDrillSection[] {
-  const seen = new Set<SessionDrillSection>()
-  const out: SessionDrillSection[] = []
-  for (const id of priority) {
-    if (!seen.has(id)) {
-      seen.add(id)
-      out.push(id)
-    }
-  }
-  for (const id of DRILL_SECTION_BASE) {
-    if (!seen.has(id)) {
-      seen.add(id)
-      out.push(id)
-    }
-  }
-  return out
-}
-
-function drillSectionOrderForLens(lensKpiId: KpiId): SessionDrillSection[] {
-  const orderByLens = SESSION_LENS_DRILL_ORDER as Partial<
-    Record<KpiId, readonly SessionDrillSection[]>
-  >
-  const explicit = orderByLens[lensKpiId]
-  if (explicit) return mergeDrillSectionOrder([...explicit])
-
-  const cat = KPI_BY_ID[lensKpiId].category
-  let priority: SessionDrillSection[]
-  switch (cat) {
-    case 'Throughput':
-      priority = [
-        'throughput',
-        'signal_measurements',
-        'neighbour_cells',
-        'serving_cell',
-        'handover_events',
-        'failures',
-        'device_model',
-      ]
-      break
-    case 'Signal':
-      priority = [
-        'signal_measurements',
-        'neighbour_cells',
-        'serving_cell',
-        'throughput',
-        'handover_events',
-        'failures',
-        'device_model',
-      ]
-      break
-    case 'Packet Transmission':
-      priority = [
-        'failures',
-        'throughput',
-        'signal_measurements',
-        'serving_cell',
-        'neighbour_cells',
-        'handover_events',
-        'device_model',
-      ]
-      break
-    case 'Reliability':
-      priority = [
-        'handover_events',
-        'failures',
-        'serving_cell',
-        'neighbour_cells',
-        'signal_measurements',
-        'throughput',
-        'device_model',
-      ]
-      break
-    case 'Connectivity':
-      priority = [
-        'failures',
-        'device_model',
-        'serving_cell',
-        'signal_measurements',
-        'throughput',
-        'neighbour_cells',
-        'handover_events',
-      ]
-      break
-    default:
-      return [...DRILL_SECTION_BASE]
-  }
-  return mergeDrillSectionOrder(priority)
-}
-
-function SessionDrillSectionBlock({
-  sectionId,
-  session,
-  subscriber,
-  lensKpiId,
-}: {
-  sectionId: SessionDrillSection
-  session: SessionPoint
-  subscriber: NetworkSubscriber | null
-  lensKpiId: KpiId
-}) {
-  switch (sectionId) {
-    case 'serving_cell': {
-      const sc = cellById(session.cellId)
-      return (
-        <section className="session-drill-block" aria-labelledby={`${session.id}-serving-h`}>
-          <h4 className="session-drill-block__title" id={`${session.id}-serving-h`}>
-            Serving cell
-          </h4>
-          <div className="session-drill-block__body">
-            <p className="session-drill-line">
-              <strong>{session.cellName}</strong>{' '}
-              <span className="mono">({session.cellId})</span>
-            </p>
-            {sc ? (
-              <p className="session-drill-line muted">
-                Site {sc.siteCode} · sector {sc.sector} · band {sc.band}
-              </p>
-            ) : null}
-          </div>
-        </section>
-      )
-    }
-    case 'neighbour_cells': {
-      const neighbours = neighbourCellsForSession(session)
-      return (
-        <section className="session-drill-block" aria-labelledby={`${session.id}-nei-h`}>
-          <h4 className="session-drill-block__title" id={`${session.id}-nei-h`}>
-            Neighbouring cells
-          </h4>
-          <div className="session-drill-block__body">
-            {neighbours.length === 0 ? (
-              <p className="session-drill-line muted">No neighbour list on the serving cell record.</p>
-            ) : (
-              <ul className="session-drill-list">
-                {neighbours.map((n) => (
-                  <li key={n.id}>
-                    <strong>{n.name}</strong> <span className="mono">({n.id})</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </section>
-      )
-    }
-    case 'signal_measurements':
-      return (
-        <section className="session-drill-block" aria-labelledby={`${session.id}-sig-h`}>
-          <h4 className="session-drill-block__title" id={`${session.id}-sig-h`}>
-            Signal measurements
-          </h4>
-          <div className="session-drill-block__body">
-            <p className="session-drill-line">
-              <strong>RF model score (session)</strong>: {session.signalQuality.toFixed(2)}
-            </p>
-            <dl className="session-drill-dl">
-              {SESSION_SIGNAL_KPI_IDS.filter((kpiId) => kpiId !== lensKpiId).map((kpiId) => (
-                <div key={kpiId} className="session-drill-dl__row">
-                  <dt>{KPI_BY_ID[kpiId].label}</dt>
-                  <dd className="mono">{formatKpiValue(kpiId, sessionKpiValue(session, kpiId))}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
-        </section>
-      )
-    case 'throughput':
-      return (
-        <section className="session-drill-block" aria-labelledby={`${session.id}-tp-h`}>
-          <h4 className="session-drill-block__title" id={`${session.id}-tp-h`}>
-            Throughput
-          </h4>
-          <div className="session-drill-block__body">
-            <p className="session-drill-line">
-              <strong>Sample DL (session record)</strong>: {session.throughputMbps} Mbps
-            </p>
-            <p className="session-drill-line">
-              <strong>Sample UL (session record)</strong>: {session.ulMbps} Mbps
-            </p>
-            <dl className="session-drill-dl">
-              {SESSION_THROUGHPUT_KPI_IDS.filter((kpiId) => kpiId !== lensKpiId).map((kpiId) => (
-                <div key={kpiId} className="session-drill-dl__row">
-                  <dt>{KPI_BY_ID[kpiId].label}</dt>
-                  <dd className="mono">{formatKpiValue(kpiId, sessionKpiValue(session, kpiId))}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
-        </section>
-      )
-    case 'handover_events':
-      return (
-        <section className="session-drill-block" aria-labelledby={`${session.id}-ho-h`}>
-          <h4 className="session-drill-block__title" id={`${session.id}-ho-h`}>
-            Handover events
-          </h4>
-          <div className="session-drill-block__body">
-            <p className="session-drill-line">
-              {session.handoverAttempted
-                ? session.handoverSuccess
-                  ? 'Handover was attempted during this session span and completed successfully.'
-                  : 'Handover was attempted during this session span and did not complete successfully.'
-                : 'No handover attempt is recorded for this session span (synthetic session record).'}
-            </p>
-            <dl className="session-drill-dl">
-              {SESSION_HANDOVER_KPI_IDS.filter((kpiId) => kpiId !== lensKpiId).map((kpiId) => (
-                <div key={kpiId} className="session-drill-dl__row">
-                  <dt>{KPI_BY_ID[kpiId].label}</dt>
-                  <dd className="mono">{formatKpiValue(kpiId, sessionKpiValue(session, kpiId))}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
-        </section>
-      )
-    case 'device_model':
-      return (
-        <section className="session-drill-block" aria-labelledby={`${session.id}-dev-h`}>
-          <h4 className="session-drill-block__title" id={`${session.id}-dev-h`}>
-            Device
-          </h4>
-          <div className="session-drill-block__body">
-            {subscriber ? (
-              <>
-                <p className="session-drill-line">
-                  <strong>Form factor</strong>: {subscriberDeviceLabel(subscriber.device)}
-                </p>
-                <p className="session-drill-line muted">
-                  {subscriber.technology.toUpperCase()} {subscriber.mode.toUpperCase()} · {subscriber.service}{' '}
-                  service · {subscriber.segment} subscriber
-                </p>
-              </>
-            ) : (
-              <p className="session-drill-line muted">Subscriber profile not loaded for this session.</p>
-            )}
-          </div>
-        </section>
-      )
-    case 'failures':
-      return (
-        <section className="session-drill-block" aria-labelledby={`${session.id}-fail-h`}>
-          <h4 className="session-drill-block__title" id={`${session.id}-fail-h`}>
-            Failures &amp; quality
-          </h4>
-          <div className="session-drill-block__body">
-            <dl className="session-drill-dl">
-              <div className="session-drill-dl__row">
-                <dt>Setup / access failures (attrib.)</dt>
-                <dd className="mono">{session.setupAccessFailures}</dd>
-              </div>
-              <div className="session-drill-dl__row">
-                <dt>Call-drop-like outcomes</dt>
-                <dd className="mono">{session.callDrops}</dd>
-              </div>
-              <div className="session-drill-dl__row">
-                <dt>Connectivity class</dt>
-                <dd>{session.connectivity}</dd>
-              </div>
-              <div className="session-drill-dl__row">
-                <dt>Packet loss (session record)</dt>
-                <dd className="mono">{session.packetLossPct.toFixed(2)}%</dd>
-              </div>
-              {SESSION_FAILURES_QUALITY_KPI_IDS.filter((kpiId) => kpiId !== lensKpiId).map((kpiId) => (
-                <div key={kpiId} className="session-drill-dl__row">
-                  <dt>{KPI_BY_ID[kpiId].label}</dt>
-                  <dd className="mono">{formatKpiValue(kpiId, sessionKpiValue(session, kpiId))}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
-        </section>
-      )
-    default:
-      return null
-  }
-}
-
-function SessionDetailsPanel({
-  session,
-  lensKpiId,
-  subscriber,
-}: {
-  session: SessionPoint
-  lensKpiId: KpiId
-  subscriber: NetworkSubscriber | null
-}) {
-  const order = useMemo(() => drillSectionOrderForLens(lensKpiId), [lensKpiId])
-  const lensLabel = KPI_BY_ID[lensKpiId].label
-  const lensValue = sessionKpiValue(session, lensKpiId)
-
-  return (
-    <div
-      className="session-details-panel session-details-panel--drill"
-      role="region"
-      aria-label={`Session drill-down for ${session.id}`}
-    >
-      <header className="session-drill-header">
-        <span className="session-drill-header__eyebrow">Global KPI lens</span>
-        <div className="session-drill-header__main">
-          <span className="session-drill-header__label">{lensLabel}</span>
-          <span className="session-drill-header__value mono">{formatKpiValue(lensKpiId, lensValue)}</span>
-        </div>
-        <p className="session-drill-header__hint">
-          Blocks below are ordered so the most relevant context appears first. The lens metric is hidden from
-          lists where it would repeat this summary.
-        </p>
-      </header>
-      <div className="session-drill-sections">
-        {order.map((sectionId) => (
-          <SessionDrillSectionBlock
-            key={sectionId}
-            sectionId={sectionId}
-            session={session}
-            subscriber={subscriber}
-            lensKpiId={lensKpiId}
-          />
-        ))}
-      </div>
-    </div>
-  )
-}
-
 function SubscriberDetailsPanel({ subscriber }: { subscriber: NetworkSubscriber }) {
   const anchor = cellById(subscriber.cellId)
   return (
@@ -692,16 +261,7 @@ function SubscriberDetailsPanel({ subscriber }: { subscriber: NetworkSubscriber 
         <strong>Service</strong>: {subscriber.service}
       </span>
       <span>
-        <strong>Time horizon</strong>: {subscriber.timeHorizon}
-      </span>
-      <span>
-        <strong>Anchor cell</strong>: {subscriber.cellName} ({subscriber.cellId})
-      </span>
-      <span>
         <strong>Neighbor cells</strong>: {anchor?.neighborIds.length ?? 0}
-      </span>
-      <span>
-        <strong>Sessions</strong>: {subscriber.sessions}
       </span>
       <span>
         <strong>Setup/access failures</strong>: {subscriber.setupAccessFailures}
@@ -738,6 +298,32 @@ function TableNavBreadcrumb({
   const cell = selectedCellId ? cellById(selectedCellId) : undefined
   const cellLabel = cell ? `${cell.name} (${cell.id})` : (selectedCellId ?? 'Cell')
 
+  if (view === 'sessions') {
+    return (
+      <nav className="table-breadcrumb" aria-label="Subscriber context">
+        <ol className="table-breadcrumb-list">
+          {selectedCellId ? (
+            <>
+              <li className="table-breadcrumb-item">
+                <button type="button" className="table-breadcrumb-link" onClick={onToSubscribers}>
+                  {cellLabel}
+                </button>
+              </li>
+              <li className="table-breadcrumb-sep" aria-hidden="true">
+                /
+              </li>
+            </>
+          ) : null}
+          <li className="table-breadcrumb-item">
+            <span className="table-breadcrumb-current mono" aria-current="page">
+              {selectedImsi}
+            </span>
+          </li>
+        </ol>
+      </nav>
+    )
+  }
+
   return (
     <nav className="table-breadcrumb" aria-label="Drill-down navigation">
       <ol className="table-breadcrumb-list">
@@ -746,7 +332,7 @@ function TableNavBreadcrumb({
             Cells
           </button>
         </li>
-        {view === 'subscribers' && selectedCellId && (
+        {selectedCellId && (
           <>
             <li className="table-breadcrumb-sep" aria-hidden="true">
               /
@@ -758,32 +344,139 @@ function TableNavBreadcrumb({
             </li>
           </>
         )}
-        {view === 'sessions' && (
-          <>
-            {selectedCellId ? (
-              <>
-                <li className="table-breadcrumb-sep" aria-hidden="true">
-                  /
-                </li>
-                <li className="table-breadcrumb-item">
-                  <button type="button" className="table-breadcrumb-link" onClick={onToSubscribers}>
-                    {cellLabel}
-                  </button>
-                </li>
-              </>
-            ) : null}
-            <li className="table-breadcrumb-sep" aria-hidden="true">
-              /
-            </li>
-            <li className="table-breadcrumb-item">
-              <span className="table-breadcrumb-current mono" aria-current="page">
-                {selectedImsi}
-              </span>
-            </li>
-          </>
-        )}
       </ol>
     </nav>
+  )
+}
+
+function connectivityChipClass(connectivity: string): string {
+  const c = connectivity.toLowerCase()
+  if (c.includes('intermittent')) return 'connectivity-chip--intermittent'
+  if (c.includes('degraded')) return 'connectivity-chip--degraded'
+  return 'connectivity-chip--stable'
+}
+
+function connectivityLabelSentenceCase(connectivity: string): string {
+  const t = connectivity.trim()
+  if (!t) return t
+  return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase()
+}
+
+function SessionCorrelatedKpisSection({
+  session,
+  lensKpiId,
+}: {
+  session: SessionPoint
+  lensKpiId: KpiId
+}) {
+  const ids = useMemo(() => correlatedKpiIdsForLens(lensKpiId), [lensKpiId])
+  const lensDef = KPI_BY_ID[lensKpiId]
+  const lensVal = sessionKpiValue(session, lensKpiId)
+  const summary = useMemo(
+    () => correlatedSessionSummary(lensKpiId, (id) => sessionKpiValue(session, id)),
+    [lensKpiId, session],
+  )
+  return (
+    <section
+      className="session-correlated-section"
+      aria-labelledby="session-correlated-h"
+      aria-describedby="session-correlated-summary"
+    >
+      <h3 className="session-correlated-section__title" id="session-correlated-h">
+        Correlated KPIs
+      </h3>
+      <div className="session-correlated-lens-strip" aria-label="Global lens value for this session">
+        <span className="session-correlated-lens-strip__label">{lensDef.label}</span>
+        <span className="session-correlated-lens-strip__value mono">{formatKpiValue(lensKpiId, lensVal)}</span>
+      </div>
+      {ids.length > 0 ? (
+        <dl className="session-correlated-dl">
+          {ids.map((kpiId) => (
+            <div key={kpiId} className="session-correlated-dl__row">
+              <dt>{KPI_BY_ID[kpiId].label}</dt>
+              <dd className="mono">{formatKpiValue(kpiId, sessionKpiValue(session, kpiId))}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      <p className="session-correlated-summary" id="session-correlated-summary">
+        {summary}
+      </p>
+    </section>
+  )
+}
+
+function SessionDetailSlideOver({
+  session,
+  lensKpiId,
+  onClose,
+}: {
+  session: SessionPoint
+  lensKpiId: KpiId
+  onClose: () => void
+}) {
+  const networkCell = cellById(session.cellId)
+  return (
+    <div className="session-detail-pane">
+      <div className="session-detail-pane__header">
+        <div className="session-detail-pane__header-body">
+          <p className="session-detail-pane__eyebrow" id="session-detail-pane-title">
+            Session
+          </p>
+          <dl className="session-detail-pane__facts">
+            <div className="session-detail-pane__fact-row">
+              <dt>Session ID</dt>
+              <dd className="mono">{session.id}</dd>
+            </div>
+            <div className="session-detail-pane__fact-row">
+              <dt>Serving cell</dt>
+              <dd>
+                {session.cellName} <span className="mono">({session.cellId})</span>
+              </dd>
+            </div>
+            {networkCell ? (
+              <div className="session-detail-pane__fact-row">
+                <dt>Site / sector / band</dt>
+                <dd>
+                  Site {networkCell.siteCode} · sector {networkCell.sector} · band {networkCell.band}
+                </dd>
+              </div>
+            ) : null}
+            <div className="session-detail-pane__fact-row">
+              <dt>Duration</dt>
+              <dd>{formatSessionDuration(session.durationMs)}</dd>
+            </div>
+          </dl>
+        </div>
+        <button type="button" className="session-detail-pane__close" onClick={onClose} aria-label="Close session details">
+          ✕
+        </button>
+      </div>
+      <div className="session-detail-pane__scroll">
+        <SessionCorrelatedKpisSection session={session} lensKpiId={lensKpiId} />
+      </div>
+    </div>
+  )
+}
+
+function SubscriberSessionSummaryBar({ subscriber }: { subscriber: NetworkSubscriber }) {
+  return (
+    <div className="subscriber-session-summary" role="group" aria-label="Subscriber profile">
+      <div className="subscriber-session-summary__grid">
+        <span>
+          <strong>Device</strong> {subscriberDeviceLabel(subscriber.device)}
+        </span>
+        <span>
+          <strong>Subscriber type</strong> {subscriber.segment}
+        </span>
+        <span>
+          <strong>Access</strong> {subscriber.technology.toUpperCase()} {subscriber.mode.toUpperCase()}
+        </span>
+        <span>
+          <strong>Service</strong> {subscriber.service}
+        </span>
+      </div>
+    </div>
   )
 }
 
@@ -813,11 +506,14 @@ export function OperatorDashboard() {
   const [selectedImsi, setSelectedImsi] = useState<string | null>(null)
   /** STATE 3: filter session table to one cell (map click); cleared on background click or navigation. */
   const [sessionCellFilter, setSessionCellFilter] = useState<string | null>(null)
+  /** When false (default), session table/map use stress-only rows; when true, show every session in scope. */
+  const [showAllSessions, setShowAllSessions] = useState(false)
   const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([])
   const [sessionSelectionAnchorId, setSessionSelectionAnchorId] = useState<string | null>(null)
   const [expandedCellIds, setExpandedCellIds] = useState<Set<string>>(() => new Set())
   const [expandedSubscriberIds, setExpandedSubscriberIds] = useState<Set<string>>(() => new Set())
-  const [expandedSessionIds, setExpandedSessionIds] = useState<Set<string>>(() => new Set())
+  /** Open slide-over session inspector (plain row click); cleared on nav / multi-select / backdrop. */
+  const [sessionDetailPaneId, setSessionDetailPaneId] = useState<string | null>(null)
   const [tableImsiSearch, setTableImsiSearch] = useState('')
 
   const [comparePeriodB, setComparePeriodB] = useState<ComparePeriodOption>('7d')
@@ -891,6 +587,35 @@ export function OperatorDashboard() {
     return allSessionsForSubscriber.filter((s) => s.cellId === sessionCellFilter)
   }, [allSessionsForSubscriber, sessionCellFilter])
 
+  const sessionsDisplay = useMemo(() => {
+    if (view !== 'sessions' || showAllSessions) return sessions
+    return sessions.filter((s) => sessionPassesStressTableFilter(s))
+  }, [view, sessions, showAllSessions])
+
+  useEffect(() => {
+    setShowAllSessions(false)
+  }, [selectedImsi, sessionCellFilter])
+
+  const sessionDetailPaneSession = useMemo(() => {
+    if (!sessionDetailPaneId) return null
+    return sessionsDisplay.find((s) => s.id === sessionDetailPaneId) ?? null
+  }, [sessionsDisplay, sessionDetailPaneId])
+
+  useEffect(() => {
+    if (sessionDetailPaneId && !sessionsDisplay.some((s) => s.id === sessionDetailPaneId)) {
+      setSessionDetailPaneId(null)
+    }
+  }, [sessionsDisplay, sessionDetailPaneId])
+
+  useEffect(() => {
+    if (!sessionDetailPaneId) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSessionDetailPaneId(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [sessionDetailPaneId])
+
   const cellFocusSessions = useMemo(() => {
     if (view !== 'subscribers' || !selectedCellId) return []
     return footprintSubscribers.flatMap((subscriber) =>
@@ -902,10 +627,10 @@ export function OperatorDashboard() {
   const isCellFocusView = view === 'subscribers' && !!selectedCellId
 
   const analyticsSessions = useMemo(() => {
-    if (isSubscriberSessionView) return sessions
+    if (isSubscriberSessionView) return sessionsDisplay
     if (isCellFocusView) return cellFocusSessions
     return []
-  }, [isSubscriberSessionView, isCellFocusView, sessions, cellFocusSessions])
+  }, [isSubscriberSessionView, isCellFocusView, sessionsDisplay, cellFocusSessions])
 
   const peerTrendByIndex = useMemo(() => {
     const bucketCount = analyticsSessions.length
@@ -1035,10 +760,6 @@ export function OperatorDashboard() {
     () => new Set(visibleSelectedSessionIds),
     [visibleSelectedSessionIds],
   )
-  const selectedSessions = useMemo(
-    () => analyticsSessions.filter((s) => selectedSessionIdSet.has(s.id)),
-    [analyticsSessions, selectedSessionIdSet],
-  )
   const selectedTrendPoints = useMemo(
     () => (isCellFocusView ? [] : trendData.filter((d) => d.id && selectedSessionIdSet.has(d.id))),
     [isCellFocusView, trendData, selectedSessionIdSet],
@@ -1111,26 +832,12 @@ export function OperatorDashboard() {
     customRangeEnd,
   )
 
-  const comparisonWasSampled =
-    isCellFocusView && comparisonSourceSessions.length < analyticsSessions.length
-
-  const comparisonHintText = isSubscriberSessionView
-    ? 'Period A and B are derived from the selected subscriber session dataset.'
-    : isCellFocusView
-      ? 'Period A and B are derived from the selected cell footprint cohort session dataset.'
-      : 'Period A and B are derived from the scoped session dataset.'
-
-  const comparisonTotalSessions = comparisonSourceSessions.length
-  const comparisonScopeTooltip = comparisonWasSampled
-    ? `Cell view sampled ${comparisonTotalSessions} of ${analyticsSessions.length} sessions for comparison performance.`
-    : `${comparisonTotalSessions} sessions in comparison scope.`
-
   function handleMapCellSelect(cellId: string) {
     if (view === 'sessions' && selectedImsi) {
       setSessionCellFilter(cellId)
       setSelectedSessionIds([])
       setSessionSelectionAnchorId(null)
-      setExpandedSessionIds(new Set())
+      setSessionDetailPaneId(null)
       return
     }
     setSessionCellFilter(null)
@@ -1144,7 +851,7 @@ export function OperatorDashboard() {
       setSessionCellFilter(null)
       setSelectedSessionIds([])
       setSessionSelectionAnchorId(null)
-      setExpandedSessionIds(new Set())
+      setSessionDetailPaneId(null)
     }
   }
 
@@ -1154,7 +861,7 @@ export function OperatorDashboard() {
     setSessionCellFilter(null)
     setSelectedSessionIds([])
     setSessionSelectionAnchorId(null)
-    setExpandedSessionIds(new Set())
+    setSessionDetailPaneId(null)
     setView('subscribers')
   }
 
@@ -1165,7 +872,7 @@ export function OperatorDashboard() {
     setSessionCellFilter(null)
     setSelectedSessionIds([])
     setSessionSelectionAnchorId(null)
-    setExpandedSessionIds(new Set())
+    setSessionDetailPaneId(null)
     setTableImsiSearch('')
   }
 
@@ -1175,7 +882,7 @@ export function OperatorDashboard() {
     setSessionCellFilter(null)
     setSelectedSessionIds([])
     setSessionSelectionAnchorId(null)
-    setExpandedSessionIds(new Set())
+    setSessionDetailPaneId(null)
   }
 
   function openSubscriber(imsi: string) {
@@ -1183,7 +890,7 @@ export function OperatorDashboard() {
     setSessionCellFilter(null)
     setSelectedSessionIds([])
     setSessionSelectionAnchorId(null)
-    setExpandedSessionIds(new Set())
+    setSessionDetailPaneId(null)
     setView('sessions')
   }
 
@@ -1193,7 +900,7 @@ export function OperatorDashboard() {
     setSessionCellFilter(null)
     setSelectedSessionIds([])
     setSessionSelectionAnchorId(null)
-    setExpandedSessionIds(new Set())
+    setSessionDetailPaneId(null)
     setView('sessions')
   }
 
@@ -1206,24 +913,24 @@ export function OperatorDashboard() {
     setSelectedSessionIds([])
     setSessionSelectionAnchorId(null)
     setExpandedSubscriberIds(new Set())
-    setExpandedSessionIds(new Set())
+    setSessionDetailPaneId(null)
   }
 
   function selectSingleSession(sessionId: string) {
     setSelectedSessionIds([sessionId])
     setSessionSelectionAnchorId(sessionId)
+    setSessionDetailPaneId(sessionId)
   }
 
   function selectSessionFromTable(sessionId: string, rowIndex: number, shiftKey: boolean) {
     if (!shiftKey) {
-      // Plain click follows standard single-select behavior.
-      setSelectedSessionIds([sessionId])
-      setSessionSelectionAnchorId(sessionId)
+      selectSingleSession(sessionId)
       return
     }
+    setSessionDetailPaneId(null)
     const clickedIsSelected = selectedSessionIdSet.has(sessionId)
     const anchorIndex = sessionSelectionAnchorId
-      ? sessions.findIndex((s) => s.id === sessionSelectionAnchorId)
+      ? sessionsDisplay.findIndex((s) => s.id === sessionSelectionAnchorId)
       : -1
     if (anchorIndex < 0 || rowIndex < 0) {
       setSelectedSessionIds((prev) => {
@@ -1234,7 +941,7 @@ export function OperatorDashboard() {
       return
     }
     const [start, end] = anchorIndex < rowIndex ? [anchorIndex, rowIndex] : [rowIndex, anchorIndex]
-    const rangeIds = sessions.slice(start, end + 1).map((s) => s.id)
+    const rangeIds = sessionsDisplay.slice(start, end + 1).map((s) => s.id)
     setSelectedSessionIds((prev) => {
       const next = new Set(prev)
       if (clickedIsSelected) {
@@ -1265,24 +972,17 @@ export function OperatorDashboard() {
     })
   }
 
-  function toggleSessionDetails(sessionId: string) {
-    setExpandedSessionIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(sessionId)) next.delete(sessionId)
-      else next.add(sessionId)
-      return next
-    })
-  }
-
   const mapMode =
     view === 'sessions' && selectedImsi
       ? 'subscriberFocus'
       : view === 'subscribers' && selectedCellId
         ? 'cellFocus'
         : 'all'
-  const selectedCell = selectedCellId ? cellById(selectedCellId) : undefined
   const showAnalytics = isSubscriberSessionView || isCellFocusView
   const selectedKpiMeta = KPI_BY_ID[selectedKpiId]
+  const showSessionInspector = Boolean(
+    view === 'sessions' && selectedImsi && sessionDetailPaneSession && sessionDetailPaneId,
+  )
 
   function snapshotGlobalFilters(): GlobalFilterSnapshot {
     return {
@@ -1361,7 +1061,7 @@ export function OperatorDashboard() {
         onDeletePreset={handleDeletePreset}
       />
 
-      <div className="workspace">
+      <div className={`workspace${showSessionInspector ? ' workspace--session-inspector' : ''}`}>
         <section className="pane table-pane">
           <div className="table-stack">
             <label className="imsi-search">
@@ -1389,18 +1089,20 @@ export function OperatorDashboard() {
               </div>
             )}
 
-            <div className="tabs">
-              {TABS.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  className={`tab ${activeTab === t.id ? 'active' : ''}`}
-                  onClick={() => handleTabSelect(t.id)}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
+            {!(view === 'sessions' && selectedImsi) && (
+              <div className="tabs">
+                {TABS.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    className={`tab ${activeTab === t.id ? 'active' : ''}`}
+                    onClick={() => handleTabSelect(t.id)}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {view === 'subscribers' && selectedCellId && (
               <TableNavBreadcrumb
@@ -1423,7 +1125,6 @@ export function OperatorDashboard() {
 
             {view === 'cells' && (
               <>
-                <p className="context-line table-footprint-hint">{cellTableFootprintHint(activeTab)}</p>
                 <div className="table-scroll">
                   {activeTab === 'failure' && (
                     <table className="minimal-table">
@@ -1621,11 +1322,6 @@ export function OperatorDashboard() {
 
             {view === 'subscribers' && selectedCellId && (
               <>
-                <p className="context-line">
-                  Footprint subscribers (this cell and neighbours), worst first —{' '}
-                  {selectedKpiMeta.label}. Use the map to switch cell; scope matches the
-                  footprint.
-                </p>
                 <div className="table-scroll">
                   <table className="minimal-table">
                     <thead>
@@ -1680,89 +1376,61 @@ export function OperatorDashboard() {
 
             {view === 'sessions' && selectedImsi && (
               <>
-                <p className="context-line">
-                  Session list for the subscriber above: row click selects sessions for map highlights and chart
-                  overlays (Shift for range). The <strong>Details</strong> column expands serving cell, neighbours,
-                  signal, throughput, handover context, device profile, and failure-related fields—order follows the
-                  selected global KPI category. Map cell click filters rows; empty map clears the filter. Map
-                  points are KPI visualization samples (see map legend), not one dot per network attachment.
-                </p>
-                {subscriberSessionScopeNote(selectedImsi, timeRange, sessions.length) ? (
-                  <p className="context-line context-line--scope" role="note">
-                    {subscriberSessionScopeNote(selectedImsi, timeRange, sessions.length)}
+                {sessionDrillSubscriber ? (
+                  <SubscriberSessionSummaryBar subscriber={sessionDrillSubscriber} />
+                ) : null}
+                <div className="session-table-toolbar">
+                  <label className="session-table-toggle-all">
+                    <input
+                      type="checkbox"
+                      checked={showAllSessions}
+                      onChange={(e) => setShowAllSessions(e.target.checked)}
+                    />
+                    <span>Show all sessions</span>
+                  </label>
+                </div>
+                {!showAllSessions && sessionsDisplay.length === 0 ? (
+                  <p className="session-table-filter-empty">
+                    No sessions in this scope have degraded or intermittent connectivity. Turn on Show all sessions to
+                    list every session in scope.
                   </p>
                 ) : null}
-                {sessionCellFilter && (
-                  <p className="session-cell-filter-banner" role="status">
-                    Showing sessions on{' '}
-                    <strong>{cellById(sessionCellFilter)?.name ?? sessionCellFilter}</strong> (
-                    {sessionCellFilter}). Click empty map area to show all sessions.
-                  </p>
-                )}
                 <div className="table-scroll table-scroll--session-table">
                   <table className="minimal-table session-table">
                     <thead>
                       <tr>
-                        <th className="row-expand-col" aria-label="Expand session engineering details" />
                         <th>Session ID</th>
-                        <th>Start time</th>
-                        <th>{selectedKpiMeta.label}</th>
+                        <th>Time</th>
+                        <th>Connectivity</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {sessions.map((s, i) => {
-                        const isExpanded = expandedSessionIds.has(s.id)
-                        return (
-                          <Fragment key={s.id}>
-                            <tr
-                              className={
-                                [
-                                  sessionCellFilter && s.cellId === sessionCellFilter
-                                    ? 'session-row--cell-focus'
-                                    : '',
-                                  selectedSessionIdSet.has(s.id) ? 'session-row--selected' : '',
-                                ]
-                                  .filter(Boolean)
-                                  .join(' ') || undefined
-                              }
-                              onClick={(e) => selectSessionFromTable(s.id, i, e.shiftKey)}
+                      {sessionsDisplay.map((s, i) => (
+                        <tr
+                          key={s.id}
+                          className={
+                            [
+                              sessionCellFilter && s.cellId === sessionCellFilter
+                                ? 'session-row--cell-focus'
+                                : '',
+                              selectedSessionIdSet.has(s.id) ? 'session-row--selected' : '',
+                            ]
+                              .filter(Boolean)
+                              .join(' ') || undefined
+                          }
+                          onClick={(e) => selectSessionFromTable(s.id, i, e.shiftKey)}
+                        >
+                          <td className="mono">{s.id}</td>
+                          <td className="mono session-time-cell">{formatSessionStartLocal(s.sessionStart)}</td>
+                          <td className="session-connectivity-cell">
+                            <span
+                              className={`connectivity-chip ${connectivityChipClass(s.connectivity)}`}
                             >
-                              <td className="row-expand-col">
-                                <button
-                                  type="button"
-                                  className="row-expand-btn"
-                                  aria-label={`${isExpanded ? 'Collapse' : 'Expand'} engineering details for session ${s.id}`}
-                                  aria-expanded={isExpanded}
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    const opening = !expandedSessionIds.has(s.id)
-                                    toggleSessionDetails(s.id)
-                                    if (opening) selectSingleSession(s.id)
-                                  }}
-                                >
-                                  {isExpanded ? '▾' : '▸'}
-                                </button>
-                              </td>
-                              <td className="mono">{s.id}</td>
-                              <td className="mono session-start-cell">
-                                {formatSessionStartLocal(s.sessionStart)}
-                              </td>
-                              <td>{formatKpiValue(selectedKpiId, sessionKpiValue(s, selectedKpiId))}</td>
-                            </tr>
-                            {isExpanded && (
-                              <tr className="session-details-row">
-                                <td colSpan={4}>
-                                  <SessionDetailsPanel
-                                    session={s}
-                                    lensKpiId={selectedKpiId}
-                                    subscriber={sessionDrillSubscriber}
-                                  />
-                                </td>
-                              </tr>
-                            )}
-                          </Fragment>
-                        )
-                      })}
+                              {connectivityLabelSentenceCase(s.connectivity)}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
@@ -1770,6 +1438,16 @@ export function OperatorDashboard() {
             )}
           </div>
         </section>
+
+        {showSessionInspector && sessionDetailPaneSession ? (
+          <section className="pane session-inspector-pane" aria-label="Session inspector">
+            <SessionDetailSlideOver
+              session={sessionDetailPaneSession}
+              lensKpiId={selectedKpiId}
+              onClose={() => setSessionDetailPaneId(null)}
+            />
+          </section>
+        ) : null}
 
         <section
           className={`pane detail-pane${showAnalytics ? ' detail-pane--sessions' : ''}`}
@@ -1781,7 +1459,7 @@ export function OperatorDashboard() {
                 selectedCellId={selectedCellId}
                 subscriberImsi={selectedImsi}
                 selectedKpiId={selectedKpiId}
-                sessions={sessions}
+                sessions={sessionsDisplay}
                 selectedSessionIds={visibleSelectedSessionIds}
                 onSessionSelect={selectSingleSession}
                 sessionTableCellFilter={sessionCellFilter}
@@ -1799,54 +1477,9 @@ export function OperatorDashboard() {
                   <h3 className="block-title">
                     {isCellFocusView ? 'Cell footprint charts' : 'Session charts'}
                   </h3>
-                  {isCellFocusView ? (
-                    <p className="session-selection-chip" role="status">
-                      Cell footprint cohort for{' '}
-                      <strong>{selectedCell?.name ?? selectedCellId ?? 'selected cell'}</strong>:&nbsp;
-                      <strong>{footprintSubscribers.length}</strong> subscribers,&nbsp;
-                      <strong>{analyticsSessions.length}</strong> sessions after global filters.
-                      {'  '}Charts are optimized as aggregated cohort analytics (
-                      {Math.min(CELL_FOCUS_TREND_BUCKETS, analyticsSessions.length)} trend buckets,
-                      scatter sampled to {scatterData.length} points max {CELL_FOCUS_SCATTER_MAX_POINTS}
-                      ).
-                    </p>
-                  ) : selectedSessions.length === 1 ? (
-                    <p className="session-selection-chip" role="status">
-                      Selected session: <strong>{selectedSessions[0].id}</strong> on{' '}
-                      {selectedSessions[0].cellName} ({selectedSessions[0].cellId}) - signal{' '}
-                      {selectedSessions[0].signalQuality.toFixed(2)}, throughput{' '}
-                      {selectedSessions[0].throughputMbps} Mbps
-                    </p>
-                  ) : selectedSessions.length > 1 ? (
-                    <p className="session-selection-chip" role="status">
-                      Selected sessions: <strong>{selectedSessions.length}</strong> across{' '}
-                      <strong>{new Set(selectedSessions.map((s) => s.cellId)).size}</strong> cells -
-                      avg signal{' '}
-                      {(
-                        selectedSessions.reduce((sum, s) => sum + s.signalQuality, 0) /
-                        selectedSessions.length
-                      ).toFixed(2)}
-                      , avg throughput{' '}
-                      {(
-                        selectedSessions.reduce((sum, s) => sum + s.throughputMbps, 0) /
-                        selectedSessions.length
-                      ).toFixed(1)}{' '}
-                      Mbps
-                    </p>
-                  ) : null}
-                  {isCellFocusView && visibleSelectedSessionIds.length > 0 && (
-                    <p className="session-selection-chip" role="status">
-                      Per-session highlight overlays are disabled in aggregated cohort mode to keep
-                      chart rendering responsive.
-                    </p>
-                  )}
                   <div className="chart-grid">
                     <figure className="chart-fig">
-                      <figcaption>
-                        {isCellFocusView
-                          ? 'Trend · bucketed throughput (cell-footprint cohort)'
-                          : 'Trend · throughput by session order'}
-                      </figcaption>
+                      <figcaption>Throughput trend</figcaption>
                       <ResponsiveContainer
                         width="100%"
                         height={220}
@@ -1919,11 +1552,7 @@ export function OperatorDashboard() {
                                     </div>
                                   ) : !isCellFocusView ? (
                                     <div className="chart-tooltip-kpi">Peers: no data</div>
-                                  ) : (
-                                    <div className="chart-tooltip-kpi">
-                                      Cohort sessions: {analyticsSessions.length}
-                                    </div>
-                                  )}
+                                  ) : null}
                                 </div>
                               )
                             }}
@@ -1983,11 +1612,7 @@ export function OperatorDashboard() {
                       </ResponsiveContainer>
                     </figure>
                     <figure className="chart-fig">
-                      <figcaption>
-                        {isCellFocusView
-                          ? 'Scatter · signal vs throughput (deterministic sample)'
-                          : 'Scatter · signal vs throughput'}
-                      </figcaption>
+                      <figcaption>Signal vs throughput</figcaption>
                       <ResponsiveContainer
                         width="100%"
                         height={220}
@@ -2021,11 +1646,6 @@ export function OperatorDashboard() {
 
                 <div className="compare-block">
                   <h3 className="block-title">Time period comparison</h3>
-                  <p className="compare-hint">
-                    <strong>Period A</strong> uses the global time range. <strong>Period B</strong> is
-                    the comparison window. KPI follows the selected global KPI ({selectedKpiMeta.label}
-                    ). {comparisonHintText}
-                  </p>
                   <div className="compare-controls">
                     <label className="compare-select-label">
                       <span>Period B (compare to)</span>
@@ -2074,9 +1694,7 @@ export function OperatorDashboard() {
                   </div>
                   <figure className="chart-fig compare-chart-fig">
                     <div className="compare-chart-header">
-                      <figcaption>
-                        {selectedKpiMeta.label}: distribution bars (Period A vs Period B)
-                      </figcaption>
+                      <figcaption>{selectedKpiMeta.label}</figcaption>
                       <div className="compare-top-legend" aria-label="Comparison chart legend">
                         <span className="compare-legend-item">
                           <span
@@ -2169,7 +1787,6 @@ export function OperatorDashboard() {
                                       {d.periodBCdfPct.toFixed(1)}%
                                     </div>
                                   )}
-                                  <div className="chart-tooltip-sub">{comparisonScopeTooltip}</div>
                                 </div>
                               )
                             }}
@@ -2214,7 +1831,6 @@ export function OperatorDashboard() {
                     ) : (
                       <p className="muted small">No session data for comparison.</p>
                     )}
-                    <p className="compare-footnote muted small">{comparisonScopeTooltip}</p>
                   </figure>
                 </div>
               </div>

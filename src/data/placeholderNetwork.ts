@@ -1393,7 +1393,8 @@ function realisticSessionDurationMs(
 ): number {
   const u = sessionFieldFingerprint(session, index)
   const v = sessionFieldFingerprint(session, index + 13) // second uncorrelated draw
-  const maxCap = Math.min(Math.max(windowMs * 0.42, 3 * 60 * 1000), 6 * 60 * 60 * 1000)
+  /** Mobile data sessions are usually well under an hour; cap synthetic spans at 60m for plausibility. */
+  const maxCap = Math.min(Math.max(windowMs * 0.42, 3 * 60 * 1000), 60 * 60 * 1000)
   const minDur = 35 * 1000
   const shaped = Math.pow(u, 0.72) * 0.92 + v * 0.08
 
@@ -1452,16 +1453,13 @@ export function formatSessionStartLocal(iso: string | undefined): string {
   })
 }
 
-/** Human-readable duration for session list (synthetic demo span). */
+/** Human-readable duration for session list (minutes + seconds only). */
 export function formatSessionDuration(durationMs: number | undefined): string {
   if (durationMs == null || !Number.isFinite(durationMs) || durationMs < 0) return '—'
   const totalSec = Math.floor(durationMs / 1000)
-  const h = Math.floor(totalSec / 3600)
-  const m = Math.floor((totalSec % 3600) / 60)
+  const m = Math.floor(totalSec / 60)
   const s = totalSec % 60
-  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`
-  if (m > 0) return s > 0 ? `${m}m ${s}s` : `${m}m`
-  return `${s}s`
+  return `${m}m ${s}s`
 }
 
 export function getSessions(

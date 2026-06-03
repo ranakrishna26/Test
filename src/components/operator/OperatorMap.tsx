@@ -906,6 +906,7 @@ export function OperatorMap({
   onSessionSelectRef.current = onSessionSelect
   const mapRef = useRef<mapboxgl.Map | null>(null)
   const mapElRef = useRef<HTMLDivElement>(null)
+  const mapShellRef = useRef<HTMLDivElement>(null)
   const popupRef = useRef<mapboxgl.Popup | null>(null)
   const pixelPopupRef = useRef<mapboxgl.Popup | null>(null)
   const pixelHoverPopupRef = useRef<mapboxgl.Popup | null>(null)
@@ -914,9 +915,10 @@ export function OperatorMap({
   selectedKpiIdRef.current = selectedKpiId
   const [mapReady, setMapReady] = useState(false)
   const [showPixels, setShowPixels] = useState(true)
-  const [showPeriodB, setShowPeriodB] = useState(true)
+  const [showPeriodB, setShowPeriodB] = useState(false)
   const pixelDisplayMode: PixelDisplayMode = 'journeySamples'
   const [legendCollapsed, setLegendCollapsed] = useState(false)
+  const [mapIsFullscreen, setMapIsFullscreen] = useState(false)
   const [mapError, setMapError] = useState<string | null>(null)
   const deferMapError = (message: string) => {
     setTimeout(() => {
@@ -925,6 +927,14 @@ export function OperatorMap({
   }
   const canShowPeriodBOverlay = mode === 'subscriberFocus'
   const showPeriodBOverlay = canShowPeriodBOverlay && showPeriodB
+
+  useEffect(() => {
+    const syncFullscreen = () => {
+      setMapIsFullscreen(document.fullscreenElement === mapShellRef.current)
+    }
+    document.addEventListener('fullscreenchange', syncFullscreen)
+    return () => document.removeEventListener('fullscreenchange', syncFullscreen)
+  }, [])
 
   const { direct, all } = useMemo(
     () =>
@@ -1497,28 +1507,27 @@ export function OperatorMap({
     }
   }, [mapReady, selectedSessionIds, selectedPeriodAPoints, compact])
 
-  const kpiLabel = kpiDefinition(selectedKpiId).label
+  const toggleMapFullscreen = () => {
+    const el = mapShellRef.current
+    if (!el) return
+    void (async () => {
+      try {
+        if (document.fullscreenElement === el) {
+          await document.exitFullscreen()
+        } else {
+          await el.requestFullscreen()
+        }
+      } catch {
+        // Fullscreen may be unavailable (iframe permissions, etc.)
+      }
+    })()
+  }
+
   return (
-    <div className={`map-shell ${compact ? 'map-shell--embed' : ''}`}>
+    <div ref={mapShellRef} className={`map-shell ${compact ? 'map-shell--embed' : ''}`}>
       <div className={`map-toolbar ${compact ? 'map-toolbar--embed' : ''}`}>
         <span className="map-toolbar-title">{compact ? 'Map' : 'RAN footprint'}</span>
         <div className="map-toolbar-actions">
-          <button
-            type="button"
-            className="map-tool-btn"
-            title="Zoom in"
-            onClick={() => mapRef.current?.zoomIn({ duration: 250 })}
-          >
-            +
-          </button>
-          <button
-            type="button"
-            className="map-tool-btn"
-            title="Zoom out"
-            onClick={() => mapRef.current?.zoomOut({ duration: 250 })}
-          >
-            −
-          </button>
           <button
             type="button"
             className="map-tool-btn"
@@ -1555,6 +1564,70 @@ export function OperatorMap({
 
       <div className="map-svg-wrap">
         <div ref={mapElRef} className="map-canvas" />
+        <div className="map-float-controls" role="toolbar" aria-label="Map controls">
+          <button
+            type="button"
+            className="map-float-controls__btn map-float-controls__btn--icon"
+            title={mapIsFullscreen ? 'Exit full screen' : 'Full screen'}
+            aria-label={mapIsFullscreen ? 'Exit full screen' : 'Full screen'}
+            onClick={toggleMapFullscreen}
+          >
+            {mapIsFullscreen ? (
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden
+              >
+                <polyline points="4 14 4 20 10 20" />
+                <polyline points="20 10 20 4 14 4" />
+                <line x1="14" y1="10" x2="21" y2="3" />
+                <line x1="3" y1="21" x2="10" y2="14" />
+              </svg>
+            ) : (
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden
+              >
+                <polyline points="4 9 4 4 9 4" />
+                <polyline points="15 4 20 4 20 9" />
+                <polyline points="20 15 20 20 15 20" />
+                <polyline points="9 20 4 20 4 15" />
+              </svg>
+            )}
+          </button>
+          <div className="map-float-controls__sep" role="presentation" />
+          <button
+            type="button"
+            className="map-float-controls__btn"
+            title="Zoom in"
+            aria-label="Zoom in"
+            onClick={() => mapRef.current?.zoomIn({ duration: 250 })}
+          >
+            +
+          </button>
+          <button
+            type="button"
+            className="map-float-controls__btn"
+            title="Zoom out"
+            aria-label="Zoom out"
+            onClick={() => mapRef.current?.zoomOut({ duration: 250 })}
+          >
+            −
+          </button>
+        </div>
         {mapError ? (
           <div className="map-error-banner" role="status">
             Map warning: {mapError}
@@ -1595,7 +1668,7 @@ export function OperatorMap({
                   aria-hidden
                 />
                 <span className="map-legend-label">Fair</span>
-                <span className="map-legend-value">Period B tint / neutral</span>
+                <span className="map-legend-value">Neutral</span>
               </div>
               <div className="map-legend-row">
                 <span
@@ -1615,7 +1688,6 @@ export function OperatorMap({
                 <span className="map-legend-label">Bad</span>
                 <span className="map-legend-value">Breached</span>
               </div>
-              <div className="map-legend-kpi">KPI: {kpiLabel}</div>
               <label className="map-legend-toggle">
                 <input
                   type="checkbox"

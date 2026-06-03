@@ -295,25 +295,19 @@ function TableNavBreadcrumb({
   onToCells: () => void
   onToSubscribers: () => void
 }) {
-  const cell = selectedCellId ? cellById(selectedCellId) : undefined
-  const cellLabel = cell ? `${cell.name} (${cell.id})` : (selectedCellId ?? 'Cell')
+  const cellIdShort = selectedCellId ?? ''
 
   if (view === 'sessions') {
+    const goBack = selectedCellId ? onToSubscribers : onToCells
+    const backLabel = selectedCellId ? 'Back to subscriber list' : 'Back to cell list'
     return (
-      <nav className="table-breadcrumb" aria-label="Subscriber context">
+      <nav className="table-breadcrumb table-breadcrumb--compact" aria-label="Subscriber context">
         <ol className="table-breadcrumb-list">
-          {selectedCellId ? (
-            <>
-              <li className="table-breadcrumb-item">
-                <button type="button" className="table-breadcrumb-link" onClick={onToSubscribers}>
-                  {cellLabel}
-                </button>
-              </li>
-              <li className="table-breadcrumb-sep" aria-hidden="true">
-                /
-              </li>
-            </>
-          ) : null}
+          <li className="table-breadcrumb-item">
+            <button type="button" className="table-breadcrumb-back" onClick={goBack} aria-label={backLabel}>
+              ←
+            </button>
+          </li>
           <li className="table-breadcrumb-item">
             <span className="table-breadcrumb-current mono" aria-current="page">
               {selectedImsi}
@@ -325,25 +319,20 @@ function TableNavBreadcrumb({
   }
 
   return (
-    <nav className="table-breadcrumb" aria-label="Drill-down navigation">
+    <nav className="table-breadcrumb table-breadcrumb--compact" aria-label="Cell context">
       <ol className="table-breadcrumb-list">
         <li className="table-breadcrumb-item">
-          <button type="button" className="table-breadcrumb-link" onClick={onToCells}>
-            Cells
+          <button type="button" className="table-breadcrumb-back" onClick={onToCells} aria-label="Back to cells">
+            ←
           </button>
         </li>
-        {selectedCellId && (
-          <>
-            <li className="table-breadcrumb-sep" aria-hidden="true">
-              /
-            </li>
-            <li className="table-breadcrumb-item">
-              <span className="table-breadcrumb-current" aria-current="page">
-                {cellLabel}
-              </span>
-            </li>
-          </>
-        )}
+        {selectedCellId ? (
+          <li className="table-breadcrumb-item">
+            <span className="table-breadcrumb-current mono" aria-current="page">
+              {cellIdShort}
+            </span>
+          </li>
+        ) : null}
       </ol>
     </nav>
   )
@@ -420,9 +409,14 @@ function SessionDetailSlideOver({
     <div className="session-detail-pane">
       <div className="session-detail-pane__header">
         <div className="session-detail-pane__header-body">
-          <p className="session-detail-pane__eyebrow" id="session-detail-pane-title">
-            Session
-          </p>
+          <div className="session-detail-pane__title-row">
+            <p className="session-detail-pane__eyebrow" id="session-detail-pane-title">
+              Session
+            </p>
+            <button type="button" className="session-detail-pane__close" onClick={onClose} aria-label="Close session details">
+              ✕
+            </button>
+          </div>
           <dl className="session-detail-pane__facts">
             <div className="session-detail-pane__fact-row">
               <dt>Session ID</dt>
@@ -448,9 +442,6 @@ function SessionDetailSlideOver({
             </div>
           </dl>
         </div>
-        <button type="button" className="session-detail-pane__close" onClick={onClose} aria-label="Close session details">
-          ✕
-        </button>
       </div>
       <div className="session-detail-pane__scroll">
         <SessionCorrelatedKpisSection session={session} lensKpiId={lensKpiId} />
@@ -858,6 +849,7 @@ export function OperatorDashboard() {
   function selectCellFromTable(cellId: string) {
     setSelectedCellId(cellId)
     setSelectedImsi(null)
+    setTableImsiSearch('')
     setSessionCellFilter(null)
     setSelectedSessionIds([])
     setSessionSelectionAnchorId(null)
@@ -879,6 +871,7 @@ export function OperatorDashboard() {
   function backToSubscribers() {
     setView('subscribers')
     setSelectedImsi(null)
+    setTableImsiSearch('')
     setSessionCellFilter(null)
     setSelectedSessionIds([])
     setSessionSelectionAnchorId(null)
@@ -887,6 +880,7 @@ export function OperatorDashboard() {
 
   function openSubscriber(imsi: string) {
     setSelectedImsi(imsi)
+    setTableImsiSearch('')
     setSessionCellFilter(null)
     setSelectedSessionIds([])
     setSessionSelectionAnchorId(null)
@@ -897,6 +891,7 @@ export function OperatorDashboard() {
   function openSubscriberFromGlobal(imsi: string) {
     setSelectedCellId(null)
     setSelectedImsi(imsi)
+    setTableImsiSearch('')
     setSessionCellFilter(null)
     setSelectedSessionIds([])
     setSessionSelectionAnchorId(null)
@@ -909,6 +904,7 @@ export function OperatorDashboard() {
     setView('cells')
     setSelectedCellId(null)
     setSelectedImsi(null)
+    setTableImsiSearch('')
     setSessionCellFilter(null)
     setSelectedSessionIds([])
     setSessionSelectionAnchorId(null)
@@ -1064,15 +1060,17 @@ export function OperatorDashboard() {
       <div className={`workspace${showSessionInspector ? ' workspace--session-inspector' : ''}`}>
         <section className="pane table-pane">
           <div className="table-stack">
-            <label className="imsi-search">
-              <span>Subscriber search</span>
-              <input
-                type="search"
-                placeholder="Filter or find subscriber…"
-                value={tableImsiSearch}
-                onChange={(e) => setTableImsiSearch(e.target.value)}
-              />
-            </label>
+            {view === 'cells' ? (
+              <label className="imsi-search">
+                <input
+                  type="search"
+                  aria-label="Search cells and subscribers"
+                  placeholder="Search cells or subscribers…"
+                  value={tableImsiSearch}
+                  onChange={(e) => setTableImsiSearch(e.target.value)}
+                />
+              </label>
+            ) : null}
 
             {view === 'cells' && tableImsiSearch.trim() && imsiQuickMatches.length > 0 && (
               <div className="quick-matches">

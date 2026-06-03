@@ -23,6 +23,7 @@ import {
   type SessionRow,
   type SubscriberGlobalFilters,
 } from '../../data/placeholderNetwork'
+import { unionCellIdsForAoiSelection } from '../../data/operatorAois'
 import { sessionKpiBand, type KpiId } from '../../data/kpis'
 
 type MapMode = 'all' | 'cellFocus' | 'subscriberFocus'
@@ -944,15 +945,30 @@ export function OperatorMap({
     [subscriberImsi],
   )
 
+  const aoiCellSet = useMemo(
+    () => unionCellIdsForAoiSelection(filters.selectedAoiIds ?? []),
+    [filters.selectedAoiIds],
+  )
+
   const fitIds = useMemo(() => {
-    if (mode === 'all') return new Set(CELLS.map((c) => c.id))
-    if (mode === 'cellFocus' && selectedCellId) return neighborSet(selectedCellId)
-    if (mode === 'subscriberFocus' && all.size) return all
-    return new Set(CELLS.map((c) => c.id))
-  }, [mode, selectedCellId, all])
+    let base: Set<string>
+    if (mode === 'all') base = new Set(CELLS.map((c) => c.id))
+    else if (mode === 'cellFocus' && selectedCellId) base = neighborSet(selectedCellId)
+    else if (mode === 'subscriberFocus' && all.size) base = all
+    else base = new Set(CELLS.map((c) => c.id))
+    if (!aoiCellSet?.size) return base
+    const inter = new Set<string>()
+    for (const id of base) if (aoiCellSet.has(id)) inter.add(id)
+    return inter.size > 0 ? inter : base
+  }, [mode, selectedCellId, all, aoiCellSet])
+
+  const cellsForMap = useMemo(() => {
+    if (!aoiCellSet?.size) return CELLS
+    return CELLS.filter((c) => aoiCellSet.has(c.id))
+  }, [aoiCellSet])
 
   const cellCollection = useMemo<FeatureCollection<Polygon, CellFeatureProps>>(() => {
-    const features: Feature<Polygon, CellFeatureProps>[] = CELLS.map((c) => {
+    const features: Feature<Polygon, CellFeatureProps>[] = cellsForMap.map((c) => {
       const center = mapXYToLngLat(c.mapX, c.mapY)
       const azimuth = bearingFromCells(c, cellById(c.neighborIds[0]))
       const geom = wedgePolygon(center, azimuth)
@@ -1004,7 +1020,7 @@ export function OperatorMap({
       }
     })
     return { type: 'FeatureCollection', features }
-  }, [mode, selectedCellId, subscriberImsi, direct, all, filters, selectedKpiId, sessions])
+  }, [mode, selectedCellId, subscriberImsi, direct, all, filters, selectedKpiId, sessions, cellsForMap])
 
   const pixelCollection = useMemo<FeatureCollection<Point, PixelProps>>(() => {
     if (mode === 'subscriberFocus' && subscriberImsi) {

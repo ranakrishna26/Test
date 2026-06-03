@@ -37,7 +37,6 @@ import {
   type Subscriber as NetworkSubscriber,
   type SubscriberDevice,
   type SubscriberGlobalFilters,
-  type TableTab,
 } from '../../data/placeholderNetwork'
 import { GlobalFiltersBar } from './GlobalFiltersBar'
 import { OperatorMap } from './OperatorMap'
@@ -49,6 +48,7 @@ import {
   type GlobalFilterSnapshot,
   type SavedFilterPreset,
 } from '../../utils/filterPresets'
+import { normalizeAoiSelection, unionCellIdsForAoiSelection } from '../../data/operatorAois'
 import { correlatedKpiIdsForLens, correlatedSessionSummary } from '../../data/kpiCorrelations'
 import {
   KPI_BY_ID,
@@ -59,13 +59,6 @@ import {
 import { DashboardTopHeader } from './DashboardTopHeader'
 
 type View = 'cells' | 'subscribers' | 'sessions'
-
-const TABS: { id: TableTab; label: string }[] = [
-  { id: 'callDrop', label: 'Call drop' },
-  { id: 'failure', label: 'Failure type' },
-  { id: 'payload', label: 'Payload' },
-  { id: 'handover', label: 'Handover' },
-]
 
 const CELL_FOCUS_TREND_BUCKETS = 48
 const CELL_FOCUS_SCATTER_MAX_POINTS = 320
@@ -182,18 +175,20 @@ function matchImsi(q: string, imsi: string): boolean {
   return imsi.replace(/\s/g, '').toLowerCase().includes(n)
 }
 
-function cellDetailColSpan(tab: TableTab): number {
-  switch (tab) {
-    case 'handover':
-      return 4
-    default:
-      return 3
-  }
-}
-
-function CellDetailsPanel({ cell }: { cell: NetworkCell }) {
-  return (
-    <div className="cell-details-grid" role="group" aria-label={`Details for ${cell.name}`}>
+function CellDetailsPanel({
+  cell,
+  showTitle = true,
+}: {
+  cell: NetworkCell
+  /** When false, only the fact grid (e.g. under breadcrumb that already shows Cell: id). */
+  showTitle?: boolean
+}) {
+  const grid = (
+    <div
+      className="cell-details-grid"
+      role="group"
+      aria-label={showTitle ? `Details for ${cell.name}` : `Cell profile and RF details for ${cell.name}`}
+    >
       <span>
         <strong>Cell ID</strong>: {cell.id}
       </span>
@@ -229,6 +224,21 @@ function CellDetailsPanel({ cell }: { cell: NetworkCell }) {
       </span>
     </div>
   )
+
+  if (!showTitle) {
+    return grid
+  }
+
+  return (
+    <section className="cell-details-panel" aria-labelledby={`cell-details-h-${cell.id}`}>
+      <h3 className="cell-details-panel__title" id={`cell-details-h-${cell.id}`}>
+        <span className="cell-details-panel__title-label">Cell:</span>
+        <span>{cell.name}</span>
+        <span className="mono cell-details-panel__title-id">({cell.id})</span>
+      </h3>
+      {grid}
+    </section>
+  )
 }
 
 function subscriberDeviceLabel(device: SubscriberDevice): string {
@@ -244,15 +254,40 @@ function subscriberDeviceLabel(device: SubscriberDevice): string {
   }
 }
 
-function SubscriberDetailsPanel({ subscriber }: { subscriber: NetworkSubscriber }) {
+function SubscriberDetailsPanel({
+  subscriber,
+  lensKpiId,
+  showTitle = true,
+}: {
+  subscriber: NetworkSubscriber
+  lensKpiId: KpiId
+  /** When false, only the fact grid is shown (e.g. under breadcrumb that already shows Subscriber: IMSI). */
+  showTitle?: boolean
+}) {
   const anchor = cellById(subscriber.cellId)
-  return (
-    <div className="subscriber-details-grid" role="group" aria-label="Additional subscriber details">
+  const kpiMeta = KPI_BY_ID[lensKpiId]
+  const kpiDisplay = formatKpiValue(lensKpiId, subscriberKpiValue(subscriber, lensKpiId))
+
+  const grid = (
+    <div
+      className="subscriber-details-grid"
+      role="group"
+      aria-label={showTitle ? 'Subscriber details' : 'Subscriber profile and metrics'}
+    >
       <span>
-        <strong>Subscriber type</strong>: {subscriber.segment}
+        <strong>Cell</strong>: {subscriber.cellName}
       </span>
       <span>
-        <strong>Device</strong>: {subscriber.device}
+        <strong>Sessions</strong>: {subscriber.sessions.toLocaleString()}
+      </span>
+      <span>
+        <strong>{kpiMeta.label}</strong>: <span className="mono">{kpiDisplay}</span>
+      </span>
+      <span>
+        <strong>Device</strong>: {subscriberDeviceLabel(subscriber.device)}
+      </span>
+      <span>
+        <strong>Subscriber type</strong>: {subscriber.segment}
       </span>
       <span>
         <strong>Technology</strong>: {subscriber.technology.toUpperCase()} {subscriber.mode.toUpperCase()}
@@ -280,18 +315,38 @@ function SubscriberDetailsPanel({ subscriber }: { subscriber: NetworkSubscriber 
       </span>
     </div>
   )
+
+  if (!showTitle) {
+    return grid
+  }
+
+  return (
+    <section className="subscriber-details-panel" aria-labelledby={`subscriber-details-h-${subscriber.imsi}`}>
+      <h3 className="subscriber-details-panel__title" id={`subscriber-details-h-${subscriber.imsi}`}>
+        <span className="subscriber-details-panel__title-label">Subscriber:</span>
+        <span className="mono">{subscriber.imsi}</span>
+      </h3>
+      {grid}
+    </section>
+  )
 }
 
 function TableNavBreadcrumb({
   view,
   selectedCellId,
   selectedImsi,
+  subscriberListTabLabel,
+  subscriberListCellName,
   onToCells,
   onToSubscribers,
 }: {
   view: 'subscribers' | 'sessions'
   selectedCellId: string | null
   selectedImsi: string | null
+  /** Active cells table tab when opening subscriber list from a cell (e.g. "Call drop"). */
+  subscriberListTabLabel?: string
+  /** Display name of the cell when in subscriber list for that cell. */
+  subscriberListCellName?: string | null
   onToCells: () => void
   onToSubscribers: () => void
 }) {
@@ -309,8 +364,9 @@ function TableNavBreadcrumb({
             </button>
           </li>
           <li className="table-breadcrumb-item">
-            <span className="table-breadcrumb-current mono" aria-current="page">
-              {selectedImsi}
+            <span className="table-breadcrumb-current" aria-current="page">
+              <span className="table-breadcrumb-current-label">Subscriber:</span>{' '}
+              <span className="mono">{selectedImsi}</span>
             </span>
           </li>
         </ol>
@@ -326,10 +382,23 @@ function TableNavBreadcrumb({
             ←
           </button>
         </li>
-        {selectedCellId ? (
+        {selectedCellId && subscriberListTabLabel && subscriberListCellName ? (
           <li className="table-breadcrumb-item">
-            <span className="table-breadcrumb-current mono" aria-current="page">
-              {cellIdShort}
+            <span
+              className="table-breadcrumb-current table-breadcrumb-current--cell-drill"
+              aria-current="page"
+            >
+              <span className="table-breadcrumb-current-label">
+                {subscriberListTabLabel}/Cell:
+              </span>{' '}
+              <span className="table-breadcrumb-cell-name">{subscriberListCellName}</span>
+            </span>
+          </li>
+        ) : selectedCellId ? (
+          <li className="table-breadcrumb-item">
+            <span className="table-breadcrumb-current" aria-current="page">
+              <span className="table-breadcrumb-current-label">Cell:</span>{' '}
+              <span className="mono">{cellIdShort}</span>
             </span>
           </li>
         ) : null}
@@ -411,7 +480,7 @@ function SessionDetailSlideOver({
         <div className="session-detail-pane__header-body">
           <div className="session-detail-pane__title-row">
             <p className="session-detail-pane__eyebrow" id="session-detail-pane-title">
-              Session
+              Session details
             </p>
             <button type="button" className="session-detail-pane__close" onClick={onClose} aria-label="Close session details">
               ✕
@@ -450,27 +519,6 @@ function SessionDetailSlideOver({
   )
 }
 
-function SubscriberSessionSummaryBar({ subscriber }: { subscriber: NetworkSubscriber }) {
-  return (
-    <div className="subscriber-session-summary" role="group" aria-label="Subscriber profile">
-      <div className="subscriber-session-summary__grid">
-        <span>
-          <strong>Device</strong> {subscriberDeviceLabel(subscriber.device)}
-        </span>
-        <span>
-          <strong>Subscriber type</strong> {subscriber.segment}
-        </span>
-        <span>
-          <strong>Access</strong> {subscriber.technology.toUpperCase()} {subscriber.mode.toUpperCase()}
-        </span>
-        <span>
-          <strong>Service</strong> {subscriber.service}
-        </span>
-      </div>
-    </div>
-  )
-}
-
 export function OperatorDashboard() {
   const [timeRange, setTimeRange] = useState('24h')
   const [customTimeRangeStart, setCustomTimeRangeStart] = useState('')
@@ -482,6 +530,9 @@ export function OperatorDashboard() {
   const [subscriberType, setSubscriberType] = useState('all')
   const [selectedKpiId, setSelectedKpiId] = useState<KpiId>(DEFAULT_GLOBAL_FILTER_SNAPSHOT.selectedKpiId)
   const [cellAttributes, setCellAttributes] = useState('')
+  const [selectedAoiIds, setSelectedAoiIds] = useState<string[]>(
+    () => DEFAULT_GLOBAL_FILTER_SNAPSHOT.selectedAoiIds,
+  )
 
   const [filterPresets, setFilterPresets] = useState<SavedFilterPreset[]>(() =>
     loadFilterPresets(),
@@ -491,7 +542,6 @@ export function OperatorDashboard() {
     persistFilterPresets(filterPresets)
   }, [filterPresets])
 
-  const [activeTab, setActiveTab] = useState<TableTab>('callDrop')
   const [view, setView] = useState<View>('cells')
   const [selectedCellId, setSelectedCellId] = useState<string | null>(null)
   const [selectedImsi, setSelectedImsi] = useState<string | null>(null)
@@ -501,8 +551,6 @@ export function OperatorDashboard() {
   const [showAllSessions, setShowAllSessions] = useState(false)
   const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([])
   const [sessionSelectionAnchorId, setSessionSelectionAnchorId] = useState<string | null>(null)
-  const [expandedCellIds, setExpandedCellIds] = useState<Set<string>>(() => new Set())
-  const [expandedSubscriberIds, setExpandedSubscriberIds] = useState<Set<string>>(() => new Set())
   /** Open slide-over session inspector (plain row click); cleared on nav / multi-select / backdrop. */
   const [sessionDetailPaneId, setSessionDetailPaneId] = useState<string | null>(null)
   const [tableImsiSearch, setTableImsiSearch] = useState('')
@@ -520,6 +568,7 @@ export function OperatorDashboard() {
       service,
       networkMode,
       subscriberType,
+      selectedAoiIds,
     }),
     [
       timeRange,
@@ -528,6 +577,7 @@ export function OperatorDashboard() {
       service,
       networkMode,
       subscriberType,
+      selectedAoiIds,
     ],
   )
 
@@ -535,6 +585,33 @@ export function OperatorDashboard() {
     () => rankedCellsByKpi(selectedKpiId, subscriberGlobalFilters),
     [selectedKpiId, subscriberGlobalFilters],
   )
+
+  useEffect(() => {
+    const aoi = unionCellIdsForAoiSelection(selectedAoiIds)
+    if (!aoi?.size) return
+    if (selectedCellId && !aoi.has(selectedCellId)) {
+      setSelectedCellId(null)
+      setSelectedImsi(null)
+      setTableImsiSearch('')
+      setSessionCellFilter(null)
+      setSelectedSessionIds([])
+      setSessionSelectionAnchorId(null)
+      setSessionDetailPaneId(null)
+      setView('cells')
+    }
+    if (selectedImsi) {
+      const anchor = SUBSCRIBERS.find((s) => s.imsi === selectedImsi)?.cellId
+      if (anchor && !aoi.has(anchor)) {
+        setSelectedImsi(null)
+        setTableImsiSearch('')
+        setSessionCellFilter(null)
+        setSelectedSessionIds([])
+        setSessionSelectionAnchorId(null)
+        setSessionDetailPaneId(null)
+        setView('cells')
+      }
+    }
+  }, [selectedAoiIds, selectedCellId, selectedImsi])
 
   const visibleRanked = useMemo(() => {
     const q = cellAttributes.trim().toLowerCase()
@@ -560,8 +637,10 @@ export function OperatorDashboard() {
   const imsiQuickMatches = useMemo(() => {
     const q = tableImsiSearch.trim()
     if (!q) return []
-    return SUBSCRIBERS.filter((s) => matchImsi(q, s.imsi)).slice(0, 8)
-  }, [tableImsiSearch])
+    return applyGlobalSubscriberFilters(SUBSCRIBERS, subscriberGlobalFilters)
+      .filter((s) => matchImsi(q, s.imsi))
+      .slice(0, 8)
+  }, [tableImsiSearch, subscriberGlobalFilters])
 
   const allSessionsForSubscriber = useMemo(
     () => (selectedImsi ? getSessions(selectedImsi, subscriberGlobalFilters) : []),
@@ -899,19 +978,6 @@ export function OperatorDashboard() {
     setView('sessions')
   }
 
-  function handleTabSelect(tabId: TableTab) {
-    setActiveTab(tabId)
-    setView('cells')
-    setSelectedCellId(null)
-    setSelectedImsi(null)
-    setTableImsiSearch('')
-    setSessionCellFilter(null)
-    setSelectedSessionIds([])
-    setSessionSelectionAnchorId(null)
-    setExpandedSubscriberIds(new Set())
-    setSessionDetailPaneId(null)
-  }
-
   function selectSingleSession(sessionId: string) {
     setSelectedSessionIds([sessionId])
     setSessionSelectionAnchorId(sessionId)
@@ -950,24 +1016,6 @@ export function OperatorDashboard() {
     setSessionSelectionAnchorId(sessionId)
   }
 
-  function toggleCellDetails(cellId: string) {
-    setExpandedCellIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(cellId)) next.delete(cellId)
-      else next.add(cellId)
-      return next
-    })
-  }
-
-  function toggleSubscriberDetails(imsi: string) {
-    setExpandedSubscriberIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(imsi)) next.delete(imsi)
-      else next.add(imsi)
-      return next
-    })
-  }
-
   const mapMode =
     view === 'sessions' && selectedImsi
       ? 'subscriberFocus'
@@ -989,6 +1037,7 @@ export function OperatorDashboard() {
       networkMode,
       subscriberType,
       cellAttributes,
+      selectedAoiIds,
       selectedKpiId,
     }
   }
@@ -1004,6 +1053,7 @@ export function OperatorDashboard() {
     setNetworkMode(filters.networkMode)
     setSubscriberType(filters.subscriberType)
     setCellAttributes(filters.cellAttributes)
+    setSelectedAoiIds(normalizeAoiSelection(filters.selectedAoiIds))
   }
 
   function handleSavePreset(name: string) {
@@ -1049,6 +1099,8 @@ export function OperatorDashboard() {
         onNetworkMode={setNetworkMode}
         cellAttributes={cellAttributes}
         onCellAttributes={setCellAttributes}
+        selectedAoiIds={selectedAoiIds}
+        onSelectedAoiIds={setSelectedAoiIds}
         selectedKpiId={selectedKpiId}
         onSelectedKpiId={setSelectedKpiId}
         presets={filterPresets}
@@ -1087,30 +1139,26 @@ export function OperatorDashboard() {
               </div>
             )}
 
-            {!(view === 'sessions' && selectedImsi) && (
-              <div className="tabs">
-                {TABS.map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    className={`tab ${activeTab === t.id ? 'active' : ''}`}
-                    onClick={() => handleTabSelect(t.id)}
-                  >
-                    {t.label}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {view === 'subscribers' && selectedCellId && (
-              <TableNavBreadcrumb
-                view="subscribers"
-                selectedCellId={selectedCellId}
-                selectedImsi={null}
-                onToCells={backToCells}
-                onToSubscribers={backToSubscribers}
-              />
-            )}
+            {view === 'subscribers' && selectedCellId ? (() => {
+              const selectedCell = cellById(selectedCellId)
+              if (!selectedCell) return null
+              return (
+                <>
+                  <TableNavBreadcrumb
+                    view="subscribers"
+                    selectedCellId={selectedCellId}
+                    selectedImsi={null}
+                    subscriberListTabLabel="Cells"
+                    subscriberListCellName={selectedCell.name}
+                    onToCells={backToCells}
+                    onToSubscribers={backToSubscribers}
+                  />
+                  <div className="cell-session-profile">
+                    <CellDetailsPanel cell={selectedCell} showTitle={false} />
+                  </div>
+                </>
+              )
+            })() : null}
             {view === 'sessions' && selectedImsi && (
               <TableNavBreadcrumb
                 view="sessions"
@@ -1124,196 +1172,22 @@ export function OperatorDashboard() {
             {view === 'cells' && (
               <>
                 <div className="table-scroll">
-                  {activeTab === 'failure' && (
-                    <table className="minimal-table">
-                      <thead>
-                        <tr>
-                          <th className="row-expand-col" aria-label="Expand row details" />
-                          <th>Cell name</th>
-                          <th>{selectedKpiMeta.label}</th>
+                  <table className="minimal-table">
+                    <thead>
+                      <tr>
+                        <th>Cell name</th>
+                        <th>{selectedKpiMeta.label}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleRanked.map((c) => (
+                        <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
+                          <td>{c.name}</td>
+                          <td>{formatKpiValue(selectedKpiId, cellKpiValue(c, subscriberGlobalFilters, selectedKpiId))}</td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {visibleRanked.map((c) => {
-                          const isExpanded = expandedCellIds.has(c.id)
-                          return (
-                            <Fragment key={c.id}>
-                              <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
-                                <td className="row-expand-col">
-                                  <button
-                                    type="button"
-                                    className="row-expand-btn"
-                                    aria-label={`${
-                                      isExpanded ? 'Collapse' : 'Expand'
-                                    } details for ${c.name}`}
-                                    aria-expanded={isExpanded}
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      toggleCellDetails(c.id)
-                                    }}
-                                  >
-                                    {isExpanded ? '▾' : '▸'}
-                                  </button>
-                                </td>
-                                <td>{c.name}</td>
-                                <td>{formatKpiValue(selectedKpiId, cellKpiValue(c, subscriberGlobalFilters, selectedKpiId))}</td>
-                              </tr>
-                              {isExpanded && (
-                                <tr className="cell-details-row" key={`${c.id}-detail`}>
-                                  <td colSpan={cellDetailColSpan('failure')}>
-                                    <CellDetailsPanel cell={c} />
-                                  </td>
-                                </tr>
-                              )}
-                            </Fragment>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  )}
-                  {activeTab === 'callDrop' && (
-                    <table className="minimal-table">
-                      <thead>
-                        <tr>
-                          <th className="row-expand-col" aria-label="Expand row details" />
-                          <th>Cell name</th>
-                          <th>{selectedKpiMeta.label}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {visibleRanked.map((c) => {
-                          const isExpanded = expandedCellIds.has(c.id)
-                          return (
-                            <Fragment key={c.id}>
-                              <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
-                                <td className="row-expand-col">
-                                  <button
-                                    type="button"
-                                    className="row-expand-btn"
-                                    aria-label={`${
-                                      isExpanded ? 'Collapse' : 'Expand'
-                                    } details for ${c.name}`}
-                                    aria-expanded={isExpanded}
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      toggleCellDetails(c.id)
-                                    }}
-                                  >
-                                    {isExpanded ? '▾' : '▸'}
-                                  </button>
-                                </td>
-                                <td>{c.name}</td>
-                                <td>{formatKpiValue(selectedKpiId, cellKpiValue(c, subscriberGlobalFilters, selectedKpiId))}</td>
-                              </tr>
-                              {isExpanded && (
-                                <tr className="cell-details-row" key={`${c.id}-detail`}>
-                                  <td colSpan={cellDetailColSpan('callDrop')}>
-                                    <CellDetailsPanel cell={c} />
-                                  </td>
-                                </tr>
-                              )}
-                            </Fragment>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  )}
-                  {activeTab === 'payload' && (
-                    <table className="minimal-table">
-                      <thead>
-                        <tr>
-                          <th className="row-expand-col" aria-label="Expand row details" />
-                          <th>Cell name</th>
-                          <th>{selectedKpiMeta.label}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {visibleRanked.map((c) => {
-                          const isExpanded = expandedCellIds.has(c.id)
-                          return (
-                            <Fragment key={c.id}>
-                              <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
-                                <td className="row-expand-col">
-                                  <button
-                                    type="button"
-                                    className="row-expand-btn"
-                                    aria-label={`${
-                                      isExpanded ? 'Collapse' : 'Expand'
-                                    } details for ${c.name}`}
-                                    aria-expanded={isExpanded}
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      toggleCellDetails(c.id)
-                                    }}
-                                  >
-                                    {isExpanded ? '▾' : '▸'}
-                                  </button>
-                                </td>
-                                <td>{c.name}</td>
-                                <td>{formatKpiValue(selectedKpiId, cellKpiValue(c, subscriberGlobalFilters, selectedKpiId))}</td>
-                              </tr>
-                              {isExpanded && (
-                                <tr className="cell-details-row" key={`${c.id}-detail`}>
-                                  <td colSpan={cellDetailColSpan('payload')}>
-                                    <CellDetailsPanel cell={c} />
-                                  </td>
-                                </tr>
-                              )}
-                            </Fragment>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  )}
-                  {activeTab === 'handover' && (
-                    <table className="minimal-table">
-                      <thead>
-                        <tr>
-                          <th className="row-expand-col" aria-label="Expand row details" />
-                          <th>Cell name</th>
-                          <th>Total handovers</th>
-                          <th>{selectedKpiMeta.label}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {visibleRanked.map((c) => {
-                          const isExpanded = expandedCellIds.has(c.id)
-                          return (
-                            <Fragment key={c.id}>
-                              <tr key={c.id} onClick={() => selectCellFromTable(c.id)}>
-                                <td className="row-expand-col">
-                                  <button
-                                    type="button"
-                                    className="row-expand-btn"
-                                    aria-label={`${
-                                      isExpanded ? 'Collapse' : 'Expand'
-                                    } details for ${c.name}`}
-                                    aria-expanded={isExpanded}
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      toggleCellDetails(c.id)
-                                    }}
-                                  >
-                                    {isExpanded ? '▾' : '▸'}
-                                  </button>
-                                </td>
-                                <td>{c.name}</td>
-                                <td>{c.totalHandovers.toLocaleString()}</td>
-                                <td>{formatKpiValue(selectedKpiId, cellKpiValue(c, subscriberGlobalFilters, selectedKpiId))}</td>
-                              </tr>
-                              {isExpanded && (
-                                <tr className="cell-details-row" key={`${c.id}-detail`}>
-                                  <td colSpan={cellDetailColSpan('handover')}>
-                                    <CellDetailsPanel cell={c} />
-                                  </td>
-                                </tr>
-                              )}
-                            </Fragment>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  )}
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </>
             )}
@@ -1324,48 +1198,19 @@ export function OperatorDashboard() {
                   <table className="minimal-table">
                     <thead>
                       <tr>
-                        <th className="row-expand-col" aria-label="Expand row details" />
                         <th>Subscriber</th>
-                        <th>Cell</th>
                         <th>Sessions</th>
                         <th>{selectedKpiMeta.label}</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {subscriberRows.map((s) => {
-                        const isExpanded = expandedSubscriberIds.has(s.imsi)
-                        return (
-                          <Fragment key={s.imsi}>
-                            <tr onClick={() => openSubscriber(s.imsi)}>
-                              <td className="row-expand-col">
-                                <button
-                                  type="button"
-                                  className="row-expand-btn"
-                                  aria-label={`${isExpanded ? 'Collapse' : 'Expand'} details for ${s.imsi}`}
-                                  aria-expanded={isExpanded}
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    toggleSubscriberDetails(s.imsi)
-                                  }}
-                                >
-                                  {isExpanded ? '▾' : '▸'}
-                                </button>
-                              </td>
-                              <td className="mono">{s.imsi}</td>
-                              <td>{s.cellName}</td>
-                              <td>{s.sessions}</td>
-                              <td>{formatKpiValue(selectedKpiId, subscriberKpiValue(s, selectedKpiId))}</td>
-                            </tr>
-                            {isExpanded && (
-                              <tr className="subscriber-details-row">
-                                <td colSpan={5}>
-                                  <SubscriberDetailsPanel subscriber={s} />
-                                </td>
-                              </tr>
-                            )}
-                          </Fragment>
-                        )
-                      })}
+                      {subscriberRows.map((s) => (
+                        <tr key={s.imsi} onClick={() => openSubscriber(s.imsi)}>
+                          <td className="mono">{s.imsi}</td>
+                          <td>{s.sessions}</td>
+                          <td>{formatKpiValue(selectedKpiId, subscriberKpiValue(s, selectedKpiId))}</td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
@@ -1375,7 +1220,13 @@ export function OperatorDashboard() {
             {view === 'sessions' && selectedImsi && (
               <>
                 {sessionDrillSubscriber ? (
-                  <SubscriberSessionSummaryBar subscriber={sessionDrillSubscriber} />
+                  <div className="subscriber-session-profile">
+                    <SubscriberDetailsPanel
+                      subscriber={sessionDrillSubscriber}
+                      lensKpiId={selectedKpiId}
+                      showTitle={false}
+                    />
+                  </div>
                 ) : null}
                 <div className="session-table-toolbar">
                   <label className="session-table-toggle-all">
@@ -1393,7 +1244,14 @@ export function OperatorDashboard() {
                     list every session in scope.
                   </p>
                 ) : null}
-                <div className="table-scroll table-scroll--session-table">
+                <h3 className="block-title session-list-title" id="session-list-title">
+                  Session list
+                </h3>
+                <div
+                  className="table-scroll table-scroll--session-table"
+                  role="region"
+                  aria-labelledby="session-list-title"
+                >
                   <table className="minimal-table session-table">
                     <thead>
                       <tr>

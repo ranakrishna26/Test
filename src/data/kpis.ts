@@ -193,7 +193,7 @@ export const KPI_DEFINITIONS = [
   },
 ] as const satisfies readonly KpiDefinition[]
 
-export const DEFAULT_KPI_ID: KpiId = 'reliability_rlf_count'
+export const DEFAULT_KPI_ID: KpiId = 'signal_rsrp'
 
 export type TabKpiLens = 'callDrop' | 'failure' | 'payload' | 'handover'
 

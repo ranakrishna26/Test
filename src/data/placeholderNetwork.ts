@@ -4,6 +4,7 @@ import {
   ALL_SUBSCRIBER_FILTERS,
   type SubscriberGlobalFilters,
 } from '../utils/filterPresets'
+import { unionCellIdsForAoiSelection } from './operatorAois'
 import {
   KPI_BY_ID,
   formatKpiValueByDefinition,
@@ -656,10 +657,12 @@ export function applyGlobalSubscriberFilters(
   subs: Subscriber[],
   f: SubscriberGlobalFilters,
 ): Subscriber[] {
+  const aoiCells = unionCellIdsForAoiSelection(f.selectedAoiIds ?? [])
   return subs.filter((s) => {
     if (f.service !== 'all' && s.service !== f.service) return false
     if (f.networkMode !== 'all' && s.mode !== f.networkMode) return false
     if (f.subscriberType !== 'all' && s.segment !== f.subscriberType) return false
+    if (aoiCells && !aoiCells.has(s.cellId)) return false
     return true
   })
 }
@@ -941,13 +944,16 @@ export function rankedCellsByKpi(
   kpiId: KpiId,
   f: SubscriberGlobalFilters = ALL_SUBSCRIBER_FILTERS,
 ): Cell[] {
-  const list = [...CELLS]
+  const aoiCells = unionCellIdsForAoiSelection(f.selectedAoiIds ?? [])
+  const source = aoiCells ? CELLS.filter((c) => aoiCells.has(c.id)) : CELLS
+  const list = [...source]
   list.sort((a, b) => {
     const av = cellKpiValue(a, f, kpiId)
     const bv = cellKpiValue(b, f, kpiId)
     const direction = kpiDefinition(kpiId).direction
-    if (direction === 'higher_is_better') return bv - av
-    return av - bv
+    /** Worst performers first (inverse of “best first”). */
+    if (direction === 'higher_is_better') return av - bv
+    return bv - av
   })
   return list
 }
@@ -958,7 +964,8 @@ export function sortSubscribersByKpi(rows: Subscriber[], kpiId: KpiId): Subscrib
   copy.sort((a, b) => {
     const av = subscriberKpiValue(a, kpiId)
     const bv = subscriberKpiValue(b, kpiId)
-    return direction === 'higher_is_better' ? bv - av : av - bv
+    /** Worst performers first. */
+    return direction === 'higher_is_better' ? av - bv : bv - av
   })
   return copy
 }
@@ -1161,7 +1168,7 @@ function sessionsForImsi(imsi: string): SessionRow[] {
 
 export type SessionTimeFilters = Pick<
   SubscriberGlobalFilters,
-  'timeRange' | 'customTimeRangeStart' | 'customTimeRangeEnd'
+  'timeRange' | 'customTimeRangeStart' | 'customTimeRangeEnd' | 'selectedAoiIds'
 >
 
 /** Map global time range to a relative window width (24h ≈ 1.0). */
@@ -1481,7 +1488,10 @@ export function getSessions(
           f.customTimeRangeStart,
           f.customTimeRangeEnd,
         )
-  return attachSessionStartTimes(sliced, f)
+  const timed = attachSessionStartTimes(sliced, f)
+  const aoiCells = unionCellIdsForAoiSelection(f.selectedAoiIds ?? [])
+  if (!aoiCells) return timed
+  return timed.filter((s) => aoiCells.has(s.cellId))
 }
 
 export function subscriberFootprint(imsi: string): {

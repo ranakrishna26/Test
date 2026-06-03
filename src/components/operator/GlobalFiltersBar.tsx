@@ -4,6 +4,7 @@ import {
   type SavedFilterPreset,
 } from '../../utils/filterPresets'
 import { groupedKpiDefinitions, type KpiId } from '../../data/kpis'
+import { OPERATOR_AOIS } from '../../data/operatorAois'
 
 type Props = {
   timeRange: string
@@ -20,6 +21,8 @@ type Props = {
   onNetworkMode: (v: 'all' | 'sa' | 'nsa') => void
   cellAttributes: string
   onCellAttributes: (v: string) => void
+  selectedAoiIds: string[]
+  onSelectedAoiIds: (v: string[]) => void
   selectedKpiId: KpiId
   onSelectedKpiId: (v: KpiId) => void
   presets: SavedFilterPreset[]
@@ -28,9 +31,10 @@ type Props = {
   onDeletePreset: (id: string | null) => void
 }
 
-type SecondaryFilterKey = 'cellAttributes'
+type SecondaryFilterKey = 'cellAttributes' | 'aoi'
 
 const SECONDARY_FILTERS: { key: SecondaryFilterKey; label: string }[] = [
+  { key: 'aoi', label: 'AOI' },
   { key: 'cellAttributes', label: 'Cell attributes' },
 ]
 
@@ -49,6 +53,8 @@ export function GlobalFiltersBar({
   onNetworkMode,
   cellAttributes,
   onCellAttributes,
+  selectedAoiIds,
+  onSelectedAoiIds,
   selectedKpiId,
   onSelectedKpiId,
   presets,
@@ -59,11 +65,14 @@ export function GlobalFiltersBar({
   const [presetSelection, setPresetSelection] = useState('')
   const [secondaryFilterMenuOpen, setSecondaryFilterMenuOpen] = useState(false)
   const [presetMenuOpen, setPresetMenuOpen] = useState(false)
+  const [aoiMenuOpen, setAoiMenuOpen] = useState(false)
   const [showSecondaryFilters, setShowSecondaryFilters] = useState<Record<SecondaryFilterKey, boolean>>({
     cellAttributes: false,
+    aoi: false,
   })
   const secondaryMenuRef = useRef<HTMLDivElement | null>(null)
   const presetMenuRef = useRef<HTMLDivElement | null>(null)
+  const aoiMenuRef = useRef<HTMLDivElement | null>(null)
   const kpiGroups = groupedKpiDefinitions()
   const defaultKpiId = DEFAULT_GLOBAL_FILTER_SNAPSHOT.selectedKpiId
   const saActive = networkMode !== 'nsa'
@@ -71,6 +80,14 @@ export function GlobalFiltersBar({
   const subscriberSelectionCount = subscriberType === 'all' ? 0 : 1
   const serviceSelectionCount = service === 'all' ? 0 : 1
   const isCustomKpi = selectedKpiId !== defaultKpiId
+  const aoiSummaryLabel = useMemo(() => {
+    if (selectedAoiIds.length === 0) return 'All areas'
+    if (selectedAoiIds.length === 1) {
+      return OPERATOR_AOIS.find((a) => a.id === selectedAoiIds[0])?.label ?? '1 area'
+    }
+    return `${selectedAoiIds.length} areas`
+  }, [selectedAoiIds])
+  const aoiSelectionCount = selectedAoiIds.length
   const enabledSecondaryFilterCount = useMemo(
     () => SECONDARY_FILTERS.filter((item) => showSecondaryFilters[item.key]).length,
     [showSecondaryFilters],
@@ -85,24 +102,28 @@ export function GlobalFiltersBar({
       if (presetMenuRef.current && target && !presetMenuRef.current.contains(target)) {
         setPresetMenuOpen(false)
       }
+      if (aoiMenuRef.current && target && !aoiMenuRef.current.contains(target)) {
+        setAoiMenuOpen(false)
+      }
     }
 
-    if (!secondaryFilterMenuOpen && !presetMenuOpen) return
+    if (!secondaryFilterMenuOpen && !presetMenuOpen && !aoiMenuOpen) return
     window.addEventListener('mousedown', handleClickOutside)
     return () => window.removeEventListener('mousedown', handleClickOutside)
-  }, [secondaryFilterMenuOpen, presetMenuOpen])
+  }, [secondaryFilterMenuOpen, presetMenuOpen, aoiMenuOpen])
 
   useEffect(() => {
     function handleEscape(event: KeyboardEvent) {
       if (event.key !== 'Escape') return
       setSecondaryFilterMenuOpen(false)
       setPresetMenuOpen(false)
+      setAoiMenuOpen(false)
     }
 
-    if (!secondaryFilterMenuOpen && !presetMenuOpen) return
+    if (!secondaryFilterMenuOpen && !presetMenuOpen && !aoiMenuOpen) return
     window.addEventListener('keydown', handleEscape)
     return () => window.removeEventListener('keydown', handleEscape)
-  }, [secondaryFilterMenuOpen, presetMenuOpen])
+  }, [secondaryFilterMenuOpen, presetMenuOpen, aoiMenuOpen])
 
   useEffect(() => {
     if (cellAttributes.trim()) {
@@ -111,6 +132,12 @@ export function GlobalFiltersBar({
       )
     }
   }, [cellAttributes])
+
+  useEffect(() => {
+    if (selectedAoiIds.length > 0) {
+      setShowSecondaryFilters((prev) => (prev.aoi ? prev : { ...prev, aoi: true }))
+    }
+  }, [selectedAoiIds.length])
 
   function toggleSaMode() {
     if (saActive && nsaActive) {
@@ -145,9 +172,11 @@ export function GlobalFiltersBar({
     onNetworkMode(DEFAULT_GLOBAL_FILTER_SNAPSHOT.networkMode)
     onSelectedKpiId(DEFAULT_GLOBAL_FILTER_SNAPSHOT.selectedKpiId)
     onCellAttributes(DEFAULT_GLOBAL_FILTER_SNAPSHOT.cellAttributes)
-    setShowSecondaryFilters({ cellAttributes: false })
+    onSelectedAoiIds(DEFAULT_GLOBAL_FILTER_SNAPSHOT.selectedAoiIds)
+    setShowSecondaryFilters({ cellAttributes: false, aoi: false })
     setSecondaryFilterMenuOpen(false)
     setPresetMenuOpen(false)
+    setAoiMenuOpen(false)
   }
 
   function savePresetFromIcon() {
@@ -272,6 +301,80 @@ export function GlobalFiltersBar({
                     )}
                   </div>
                 </label>
+                {/* Optional filters from ⊕ render after core chips so new filters stack at the end. */}
+                {showSecondaryFilters.aoi && (
+                  <div className="filter-chip filter-chip-aoi filter-chip-menu-wrap" ref={aoiMenuRef}>
+                    <span>AOI</span>
+                    <div className="filter-chip-control">
+                      <button
+                        type="button"
+                        className={`filter-chip-aoi-trigger${aoiMenuOpen ? ' filter-chip-aoi-trigger-open' : ''}`}
+                        aria-haspopup="listbox"
+                        aria-expanded={aoiMenuOpen}
+                        aria-label="Area of interest filter"
+                        title="Areas of interest (subset of network footprint)"
+                        onClick={() => {
+                          setAoiMenuOpen((prev) => !prev)
+                          setSecondaryFilterMenuOpen(false)
+                          setPresetMenuOpen(false)
+                        }}
+                      >
+                        {aoiSummaryLabel}
+                      </button>
+                      {aoiSelectionCount > 0 && (
+                        <span className="filter-chip-badge" aria-label="Selected AOI count">
+                          {aoiSelectionCount}
+                        </span>
+                      )}
+                      {aoiSelectionCount > 0 && (
+                        <button
+                          type="button"
+                          className="filter-chip-clear"
+                          aria-label="Clear AOI selections"
+                          onClick={() => onSelectedAoiIds([])}
+                        >
+                          ×
+                        </button>
+                      )}
+                      {aoiMenuOpen && (
+                        <div
+                          className="filters-dropdown-menu filters-dropdown-menu-aoi"
+                          role="listbox"
+                          aria-label="Choose areas of interest"
+                          aria-multiselectable="true"
+                        >
+                          <p className="filters-dropdown-heading">Areas of interest</p>
+                          {OPERATOR_AOIS.map((aoi) => {
+                            const checked = selectedAoiIds.includes(aoi.id)
+                            return (
+                              <label key={aoi.id} className="filters-dropdown-check">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => {
+                                    if (checked) {
+                                      onSelectedAoiIds(selectedAoiIds.filter((id) => id !== aoi.id))
+                                    } else {
+                                      onSelectedAoiIds([...selectedAoiIds, aoi.id])
+                                    }
+                                  }}
+                                />
+                                <span title={aoi.hint}>{aoi.label}</span>
+                              </label>
+                            )
+                          })}
+                          <button
+                            type="button"
+                            className="filters-dropdown-action"
+                            onClick={() => onSelectedAoiIds([])}
+                          >
+                            Clear all areas
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="filters-icon-cluster" role="group" aria-label="Global filter actions">
                 <div className="filters-icon-menu-wrap" ref={secondaryMenuRef}>
@@ -285,6 +388,7 @@ export function GlobalFiltersBar({
                     onClick={() => {
                       setSecondaryFilterMenuOpen((prev) => !prev)
                       setPresetMenuOpen(false)
+                      setAoiMenuOpen(false)
                     }}
                   >
                     <span aria-hidden="true" className="preset-icon-glyph">
@@ -314,9 +418,12 @@ export function GlobalFiltersBar({
                                 [item.key]: checked,
                               }))
                               if (!checked && item.key === 'cellAttributes') onCellAttributes('')
+                              if (!checked && item.key === 'aoi') onSelectedAoiIds([])
                             }}
                           />
-                          <span>{item.label}</span>
+                          <span className={item.key === 'aoi' ? 'filters-label-acronym' : undefined}>
+                            {item.label}
+                          </span>
                         </label>
                       ))}
                     </div>
@@ -355,6 +462,7 @@ export function GlobalFiltersBar({
                     onClick={() => {
                       setPresetMenuOpen((prev) => !prev)
                       setSecondaryFilterMenuOpen(false)
+                      setAoiMenuOpen(false)
                     }}
                   >
                     <span aria-hidden="true" className="preset-icon-glyph">

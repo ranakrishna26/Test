@@ -1,4 +1,5 @@
 import { DEFAULT_KPI_ID, isKpiId, type KpiId } from '../data/kpis'
+import { normalizeAoiSelection } from '../data/operatorAois'
 
 const STORAGE_KEY = 'operator-dashboard-global-filter-presets'
 
@@ -10,6 +11,8 @@ export type GlobalFilterSnapshot = {
   networkMode: 'all' | 'sa' | 'nsa'
   subscriberType: string
   cellAttributes: string
+  /** Multi-select areas of interest; empty = entire network footprint. */
+  selectedAoiIds: string[]
   selectedKpiId: KpiId
 }
 
@@ -22,6 +25,7 @@ export type SubscriberGlobalFilters = Pick<
   | 'service'
   | 'networkMode'
   | 'subscriberType'
+  | 'selectedAoiIds'
 >
 
 export const ALL_SUBSCRIBER_FILTERS: SubscriberGlobalFilters = {
@@ -31,6 +35,7 @@ export const ALL_SUBSCRIBER_FILTERS: SubscriberGlobalFilters = {
   service: 'all',
   networkMode: 'sa',
   subscriberType: 'all',
+  selectedAoiIds: [],
 }
 
 export const DEFAULT_GLOBAL_FILTER_SNAPSHOT: GlobalFilterSnapshot = {
@@ -41,6 +46,7 @@ export const DEFAULT_GLOBAL_FILTER_SNAPSHOT: GlobalFilterSnapshot = {
   networkMode: 'sa',
   subscriberType: 'all',
   cellAttributes: '',
+  selectedAoiIds: [],
   selectedKpiId: DEFAULT_KPI_ID,
 }
 
@@ -65,6 +71,8 @@ function isSnapshot(x: unknown): x is GlobalFilterSnapshot {
     (x.networkMode === 'all' || x.networkMode === 'sa' || x.networkMode === 'nsa') &&
     typeof x.subscriberType === 'string' &&
     typeof x.cellAttributes === 'string' &&
+    Array.isArray(x.selectedAoiIds) &&
+    x.selectedAoiIds.every((id) => typeof id === 'string') &&
     isKpiId(x.selectedKpiId)
   )
 }
@@ -90,6 +98,7 @@ function normalizeSnapshot(x: unknown): GlobalFilterSnapshot | null {
   const cellAttributes = typeof x.cellAttributes === 'string' ? x.cellAttributes : null
   if (!timeRange || !subscriberType || cellAttributes === null) return null
   const selectedKpiId = isKpiId(x.selectedKpiId) ? x.selectedKpiId : DEFAULT_KPI_ID
+  const selectedAoiIds = normalizeAoiSelection(x.selectedAoiIds)
   return {
     timeRange,
     customTimeRangeStart: typeof x.customTimeRangeStart === 'string' ? x.customTimeRangeStart : '',
@@ -98,6 +107,7 @@ function normalizeSnapshot(x: unknown): GlobalFilterSnapshot | null {
     networkMode,
     subscriberType,
     cellAttributes,
+    selectedAoiIds,
     selectedKpiId,
   }
 }

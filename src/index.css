@@ -125,8 +125,12 @@ html {
 /* Acronyms on filter chips (KPI, AOI): sentence-case would render e.g. "Kpi", "Aoi". */
 .operator-app .filter-chip.filter-chip-aoi > span,
 .operator-app .filter-chip.filter-chip-aoi > span::first-letter,
+.operator-app .filter-chip.filter-chip-geo > span,
+.operator-app .filter-chip.filter-chip-geo > span::first-letter,
 .operator-app .filter-chip.filter-chip-kpi > span,
 .operator-app .filter-chip.filter-chip-kpi > span::first-letter,
+.operator-app .filter-chip-aoi-trigger > .filters-label-acronym,
+.operator-app .filter-chip-aoi-trigger > .filters-label-acronym::first-letter,
 .operator-app .filters-dropdown-check > span.filters-label-acronym,
 .operator-app .filters-dropdown-check > span.filters-label-acronym::first-letter {
   text-transform: none !important;
@@ -565,8 +569,42 @@ html {
   padding-top: 0.45rem;
 }
 
+.filters-dropdown-menu-postcodes {
+  max-height: none;
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 14rem;
+}
+
+.filters-dropdown-menu-postcodes .filters-dropdown-search {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.35rem 0.45rem;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(15, 23, 42, 0.95);
+  color: var(--text);
+}
+
+.filters-dropdown-postcode-scroll {
+  max-height: min(42vh, 17rem);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 0.1rem;
+}
+
 .filters-chip-row-secondary {
   width: 100%;
+}
+
+.filters-chip-row-optional-filters {
+  width: 100%;
+  flex: 0 1 auto;
+  align-items: flex-start;
 }
 
 .filters-icon-badge {

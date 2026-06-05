@@ -4,7 +4,7 @@ import {
   ALL_SUBSCRIBER_FILTERS,
   type SubscriberGlobalFilters,
 } from '../utils/filterPresets'
-import { unionCellIdsForAoiSelection } from './operatorAois'
+import { unionCellIdsForGeoSelection } from './operatorGeoFilters'
 import {
   KPI_BY_ID,
   formatKpiValueByDefinition,
@@ -119,7 +119,7 @@ export const CELLS: Cell[] = [
     vendor: 'Nokia',
     mapX: 24,
     mapY: 46,
-    neighborIds: ['NR-4103', 'NR-2201', 'NR-4478'],
+    neighborIds: ['NR-4103', 'NR-2201', 'NR-4478', 'NR-7550'],
   },
   {
     id: 'NR-4103',
@@ -215,7 +215,7 @@ export const CELLS: Cell[] = [
     vendor: 'Ericsson',
     mapX: 48,
     mapY: 34,
-    neighborIds: ['NR-4103', 'NR-2201', 'NR-5520'],
+    neighborIds: ['NR-4103', 'NR-2201', 'NR-5520', 'NR-4220'],
   },
   {
     id: 'NR-9934',
@@ -239,7 +239,7 @@ export const CELLS: Cell[] = [
     vendor: 'Nokia',
     mapX: 76,
     mapY: 45,
-    neighborIds: ['NR-8842', 'NR-7710', 'NR-5588', 'NR-7744'],
+    neighborIds: ['NR-8842', 'NR-7710', 'NR-5588', 'NR-7744', 'NR-6440'],
   },
   {
     id: 'NR-7710',
@@ -263,7 +263,7 @@ export const CELLS: Cell[] = [
     vendor: 'Ericsson',
     mapX: 83,
     mapY: 30,
-    neighborIds: ['NR-5520', 'NR-9934', 'NR-5588'],
+    neighborIds: ['NR-5520', 'NR-9934', 'NR-5588', 'NR-8660'],
   },
   {
     id: 'NR-2201',
@@ -287,7 +287,7 @@ export const CELLS: Cell[] = [
     vendor: 'Nokia',
     mapX: 30,
     mapY: 32,
-    neighborIds: ['NR-1021', 'NR-6002', 'NR-4478'],
+    neighborIds: ['NR-1021', 'NR-6002', 'NR-4478', 'NR-4220'],
   },
   {
     id: 'NR-3305',
@@ -335,7 +335,7 @@ export const CELLS: Cell[] = [
     vendor: 'Samsung',
     mapX: 15,
     mapY: 44,
-    neighborIds: ['NR-1021', 'NR-2201'],
+    neighborIds: ['NR-1021', 'NR-2201', 'NR-3110'],
   },
   {
     id: 'NR-5588',
@@ -359,7 +359,7 @@ export const CELLS: Cell[] = [
     vendor: 'Nokia',
     mapX: 88,
     mapY: 41,
-    neighborIds: ['NR-9934', 'NR-7710', 'NR-7744', 'NR-9093'],
+    neighborIds: ['NR-9934', 'NR-7710', 'NR-7744', 'NR-9093', 'NR-5330'],
   },
   {
     id: 'NR-6612',
@@ -407,7 +407,7 @@ export const CELLS: Cell[] = [
     vendor: 'Nokia',
     mapX: 79,
     mapY: 44,
-    neighborIds: ['NR-9934', 'NR-5588', 'NR-6612', 'NR-9093'],
+    neighborIds: ['NR-9934', 'NR-5588', 'NR-6612', 'NR-9093', 'NR-6440'],
   },
   {
     id: 'NR-8851',
@@ -431,7 +431,7 @@ export const CELLS: Cell[] = [
     vendor: 'Ericsson',
     mapX: 33,
     mapY: 42,
-    neighborIds: ['NR-2201', 'NR-4103', 'NR-6002', 'NR-4478'],
+    neighborIds: ['NR-2201', 'NR-4103', 'NR-6002', 'NR-4478', 'NR-4220'],
   },
   {
     id: 'NR-9093',
@@ -455,7 +455,151 @@ export const CELLS: Cell[] = [
     vendor: 'Samsung',
     mapX: 86,
     mapY: 38,
-    neighborIds: ['NR-7744', 'NR-5588', 'NR-7710'],
+    neighborIds: ['NR-7744', 'NR-5588', 'NR-7710', 'NR-5330', 'NR-8660'],
+  },
+  {
+    id: 'NR-3110',
+    name: 'LDN-HydeParkCorner-West',
+    setupAccessFailures: 17,
+    callDrops: 48,
+    dlMbps: 59,
+    ulMbps: 12.2,
+    totalHandovers: 1280,
+    hoSuccessPct: 92.6,
+    siteCode: 'LDN016',
+    sector: 'S2',
+    azimuthDeg: 88,
+    pci: 402,
+    nrArfcn: 636120,
+    band: 'n78',
+    bandwidthMhz: 100,
+    tac: 41036,
+    antennaHeightM: 30,
+    electricalTiltDeg: 6,
+    vendor: 'Nokia',
+    mapX: 5,
+    mapY: 40,
+    neighborIds: ['NR-4478'],
+  },
+  {
+    id: 'NR-4220',
+    name: 'LDN-KingsCross-North',
+    setupAccessFailures: 22,
+    callDrops: 61,
+    dlMbps: 48,
+    ulMbps: 10.5,
+    totalHandovers: 1520,
+    hoSuccessPct: 90.5,
+    siteCode: 'LDN017',
+    sector: 'S1',
+    azimuthDeg: 198,
+    pci: 418,
+    nrArfcn: 635280,
+    band: 'n78',
+    bandwidthMhz: 100,
+    tac: 41037,
+    antennaHeightM: 32,
+    electricalTiltDeg: 7,
+    vendor: 'Ericsson',
+    mapX: 38,
+    mapY: 26,
+    neighborIds: ['NR-8851', 'NR-2201', 'NR-6002'],
+  },
+  {
+    id: 'NR-5330',
+    name: 'LDN-Spitalfields-East',
+    setupAccessFailures: 27,
+    callDrops: 74,
+    dlMbps: 44,
+    ulMbps: 9.9,
+    totalHandovers: 1680,
+    hoSuccessPct: 88.7,
+    siteCode: 'LDN018',
+    sector: 'S3',
+    azimuthDeg: 268,
+    pci: 433,
+    nrArfcn: 638178,
+    band: 'n78',
+    bandwidthMhz: 100,
+    tac: 41038,
+    antennaHeightM: 28,
+    electricalTiltDeg: 5,
+    vendor: 'Samsung',
+    mapX: 94,
+    mapY: 38,
+    neighborIds: ['NR-9093', 'NR-5588', 'NR-8660'],
+  },
+  {
+    id: 'NR-6440',
+    name: 'LDN-Southwark-Bridge',
+    setupAccessFailures: 13,
+    callDrops: 39,
+    dlMbps: 66,
+    ulMbps: 14.2,
+    totalHandovers: 1050,
+    hoSuccessPct: 94.8,
+    siteCode: 'LDN019',
+    sector: 'S1',
+    azimuthDeg: 312,
+    pci: 446,
+    nrArfcn: 637920,
+    band: 'n78',
+    bandwidthMhz: 100,
+    tac: 41039,
+    antennaHeightM: 27,
+    electricalTiltDeg: 5,
+    vendor: 'Nokia',
+    mapX: 84,
+    mapY: 52,
+    neighborIds: ['NR-7744', 'NR-9934'],
+  },
+  {
+    id: 'NR-7550',
+    name: 'LDN-Victoria-Gateway',
+    setupAccessFailures: 20,
+    callDrops: 55,
+    dlMbps: 51,
+    ulMbps: 11.2,
+    totalHandovers: 1390,
+    hoSuccessPct: 91.4,
+    siteCode: 'LDN020',
+    sector: 'S2',
+    azimuthDeg: 22,
+    pci: 459,
+    nrArfcn: 636288,
+    band: 'n78',
+    bandwidthMhz: 80,
+    tac: 41040,
+    antennaHeightM: 29,
+    electricalTiltDeg: 6,
+    vendor: 'Ericsson',
+    mapX: 22,
+    mapY: 54,
+    neighborIds: ['NR-1021', 'NR-4478'],
+  },
+  {
+    id: 'NR-8660',
+    name: 'LDN-Shoreditch-High',
+    setupAccessFailures: 25,
+    callDrops: 68,
+    dlMbps: 46,
+    ulMbps: 10.4,
+    totalHandovers: 1590,
+    hoSuccessPct: 89.2,
+    siteCode: 'LDN021',
+    sector: 'S1',
+    azimuthDeg: 248,
+    pci: 471,
+    nrArfcn: 638346,
+    band: 'n78',
+    bandwidthMhz: 100,
+    tac: 41041,
+    antennaHeightM: 31,
+    electricalTiltDeg: 6,
+    vendor: 'Samsung',
+    mapX: 97,
+    mapY: 42,
+    neighborIds: ['NR-9093', 'NR-5330', 'NR-7710'],
   },
 ]
 
@@ -471,8 +615,8 @@ export function neighborSet(cellId: string): Set<string> {
   return new Set([cellId, ...c.neighborIds])
 }
 
-/** ~320 subs per serving cell → ~2.5k total (deterministic, telecom-scale footprint). */
-const SUBSCRIBERS_PER_CELL = 320
+/** ~400 subs per serving cell; map caps pixels separately for smooth GL rendering. */
+const SUBSCRIBERS_PER_CELL = 400
 
 function mix32(n: number): number {
   let x = n >>> 0
@@ -657,12 +801,15 @@ export function applyGlobalSubscriberFilters(
   subs: Subscriber[],
   f: SubscriberGlobalFilters,
 ): Subscriber[] {
-  const aoiCells = unionCellIdsForAoiSelection(f.selectedAoiIds ?? [])
+  const geoCells = unionCellIdsForGeoSelection(
+    f.selectedRegionIds ?? [],
+    f.selectedPostcodeAreaIds ?? [],
+  )
   return subs.filter((s) => {
     if (f.service !== 'all' && s.service !== f.service) return false
     if (f.networkMode !== 'all' && s.mode !== f.networkMode) return false
     if (f.subscriberType !== 'all' && s.segment !== f.subscriberType) return false
-    if (aoiCells && !aoiCells.has(s.cellId)) return false
+    if (geoCells !== null && !geoCells.has(s.cellId)) return false
     return true
   })
 }
@@ -944,8 +1091,8 @@ export function rankedCellsByKpi(
   kpiId: KpiId,
   f: SubscriberGlobalFilters = ALL_SUBSCRIBER_FILTERS,
 ): Cell[] {
-  const aoiCells = unionCellIdsForAoiSelection(f.selectedAoiIds ?? [])
-  const source = aoiCells ? CELLS.filter((c) => aoiCells.has(c.id)) : CELLS
+  const geoCells = unionCellIdsForGeoSelection(f.selectedRegionIds ?? [], f.selectedPostcodeAreaIds ?? [])
+  const source = geoCells ? CELLS.filter((c) => geoCells.has(c.id)) : CELLS
   const list = [...source]
   list.sort((a, b) => {
     const av = cellKpiValue(a, f, kpiId)
@@ -1168,7 +1315,11 @@ function sessionsForImsi(imsi: string): SessionRow[] {
 
 export type SessionTimeFilters = Pick<
   SubscriberGlobalFilters,
-  'timeRange' | 'customTimeRangeStart' | 'customTimeRangeEnd' | 'selectedAoiIds'
+  | 'timeRange'
+  | 'customTimeRangeStart'
+  | 'customTimeRangeEnd'
+  | 'selectedRegionIds'
+  | 'selectedPostcodeAreaIds'
 >
 
 /** Map global time range to a relative window width (24h ≈ 1.0). */
@@ -1489,9 +1640,12 @@ export function getSessions(
           f.customTimeRangeEnd,
         )
   const timed = attachSessionStartTimes(sliced, f)
-  const aoiCells = unionCellIdsForAoiSelection(f.selectedAoiIds ?? [])
-  if (!aoiCells) return timed
-  return timed.filter((s) => aoiCells.has(s.cellId))
+  const geoCells = unionCellIdsForGeoSelection(
+    f.selectedRegionIds ?? [],
+    f.selectedPostcodeAreaIds ?? [],
+  )
+  if (!geoCells) return timed
+  return timed.filter((s) => geoCells.has(s.cellId))
 }
 
 export function subscriberFootprint(imsi: string): {

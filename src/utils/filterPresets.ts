@@ -1,5 +1,7 @@
 import { DEFAULT_KPI_ID, isKpiId, type KpiId } from '../data/kpis'
-import { normalizeAoiSelection } from '../data/operatorAois'
+import { CELL_REGION_ID, normalizePostcodeSelection, normalizeRegionSelection } from '../data/operatorGeoFilters'
+import { CELL_UNIT_POSTCODES } from '../data/operatorUnitPostcodes'
+import { normalizeAoiSelection, unionCellIdsForAoiSelection } from '../data/operatorAois'
 
 const STORAGE_KEY = 'operator-dashboard-global-filter-presets'
 
@@ -11,8 +13,10 @@ export type GlobalFilterSnapshot = {
   networkMode: 'all' | 'sa' | 'nsa'
   subscriberType: string
   cellAttributes: string
-  /** Multi-select areas of interest; empty = entire network footprint. */
-  selectedAoiIds: string[]
+  /** AOI: UK regions (multi-select). Empty = any region. */
+  selectedRegionIds: string[]
+  /** AOI: London unit postcodes e.g. E1 6AN (multi-select). Empty = any postcode. */
+  selectedPostcodeAreaIds: string[]
   selectedKpiId: KpiId
 }
 
@@ -25,7 +29,8 @@ export type SubscriberGlobalFilters = Pick<
   | 'service'
   | 'networkMode'
   | 'subscriberType'
-  | 'selectedAoiIds'
+  | 'selectedRegionIds'
+  | 'selectedPostcodeAreaIds'
 >
 
 export const ALL_SUBSCRIBER_FILTERS: SubscriberGlobalFilters = {
@@ -35,7 +40,8 @@ export const ALL_SUBSCRIBER_FILTERS: SubscriberGlobalFilters = {
   service: 'all',
   networkMode: 'sa',
   subscriberType: 'all',
-  selectedAoiIds: [],
+  selectedRegionIds: [],
+  selectedPostcodeAreaIds: [],
 }
 
 export const DEFAULT_GLOBAL_FILTER_SNAPSHOT: GlobalFilterSnapshot = {
@@ -46,7 +52,8 @@ export const DEFAULT_GLOBAL_FILTER_SNAPSHOT: GlobalFilterSnapshot = {
   networkMode: 'sa',
   subscriberType: 'all',
   cellAttributes: '',
-  selectedAoiIds: [],
+  selectedRegionIds: [],
+  selectedPostcodeAreaIds: [],
   selectedKpiId: DEFAULT_KPI_ID,
 }
 
@@ -63,6 +70,11 @@ function isRecord(x: unknown): x is Record<string, unknown> {
 
 function isSnapshot(x: unknown): x is GlobalFilterSnapshot {
   if (!isRecord(x)) return false
+  const regionsOk =
+    Array.isArray(x.selectedRegionIds) && x.selectedRegionIds.every((id) => typeof id === 'string')
+  const postsOk =
+    Array.isArray(x.selectedPostcodeAreaIds) &&
+    x.selectedPostcodeAreaIds.every((id) => typeof id === 'string')
   return (
     typeof x.timeRange === 'string' &&
     typeof x.customTimeRangeStart === 'string' &&
@@ -71,8 +83,8 @@ function isSnapshot(x: unknown): x is GlobalFilterSnapshot {
     (x.networkMode === 'all' || x.networkMode === 'sa' || x.networkMode === 'nsa') &&
     typeof x.subscriberType === 'string' &&
     typeof x.cellAttributes === 'string' &&
-    Array.isArray(x.selectedAoiIds) &&
-    x.selectedAoiIds.every((id) => typeof id === 'string') &&
+    regionsOk &&
+    postsOk &&
     isKpiId(x.selectedKpiId)
   )
 }
@@ -87,6 +99,29 @@ function isPreset(x: unknown): x is SavedFilterPreset {
   )
 }
 
+function migrateLegacyAoiToGeo(selectedAoiIds: unknown): {
+  regions: string[]
+  postcodes: string[]
+} {
+  const legacy = normalizeAoiSelection(selectedAoiIds)
+  if (!legacy.length) return { regions: [], postcodes: [] }
+  const cells = unionCellIdsForAoiSelection(legacy)
+  if (!cells?.size) return { regions: [], postcodes: [] }
+  const reg = new Set<string>()
+  const post = new Set<string>()
+  for (const cid of cells) {
+    const rg = CELL_REGION_ID[cid]
+    if (rg) reg.add(rg)
+    for (const unit of CELL_UNIT_POSTCODES[cid] ?? []) {
+      post.add(unit)
+    }
+  }
+  return {
+    regions: normalizeRegionSelection([...reg]),
+    postcodes: normalizePostcodeSelection([...post]),
+  }
+}
+
 function normalizeSnapshot(x: unknown): GlobalFilterSnapshot | null {
   if (!isRecord(x)) return null
   const networkMode =
@@ -98,7 +133,21 @@ function normalizeSnapshot(x: unknown): GlobalFilterSnapshot | null {
   const cellAttributes = typeof x.cellAttributes === 'string' ? x.cellAttributes : null
   if (!timeRange || !subscriberType || cellAttributes === null) return null
   const selectedKpiId = isKpiId(x.selectedKpiId) ? x.selectedKpiId : DEFAULT_KPI_ID
-  const selectedAoiIds = normalizeAoiSelection(x.selectedAoiIds)
+
+  let selectedRegionIds = normalizeRegionSelection(x.selectedRegionIds)
+  let selectedPostcodeAreaIds = normalizePostcodeSelection(x.selectedPostcodeAreaIds)
+
+  if (
+    !selectedRegionIds.length &&
+    !selectedPostcodeAreaIds.length &&
+    'selectedAoiIds' in x &&
+    Array.isArray(x.selectedAoiIds)
+  ) {
+    const migrated = migrateLegacyAoiToGeo(x.selectedAoiIds)
+    selectedRegionIds = migrated.regions
+    selectedPostcodeAreaIds = migrated.postcodes
+  }
+
   return {
     timeRange,
     customTimeRangeStart: typeof x.customTimeRangeStart === 'string' ? x.customTimeRangeStart : '',
@@ -107,7 +156,8 @@ function normalizeSnapshot(x: unknown): GlobalFilterSnapshot | null {
     networkMode,
     subscriberType,
     cellAttributes,
-    selectedAoiIds,
+    selectedRegionIds,
+    selectedPostcodeAreaIds,
     selectedKpiId,
   }
 }

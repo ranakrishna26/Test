@@ -48,7 +48,11 @@ import {
   type GlobalFilterSnapshot,
   type SavedFilterPreset,
 } from '../../utils/filterPresets'
-import { normalizeAoiSelection, unionCellIdsForAoiSelection } from '../../data/operatorAois'
+import {
+  normalizePostcodeSelection,
+  normalizeRegionSelection,
+  unionCellIdsForGeoSelection,
+} from '../../data/operatorGeoFilters'
 import { correlatedKpiIdsForLens, correlatedSessionSummary } from '../../data/kpiCorrelations'
 import {
   KPI_BY_ID,
@@ -530,8 +534,11 @@ export function OperatorDashboard() {
   const [subscriberType, setSubscriberType] = useState('all')
   const [selectedKpiId, setSelectedKpiId] = useState<KpiId>(DEFAULT_GLOBAL_FILTER_SNAPSHOT.selectedKpiId)
   const [cellAttributes, setCellAttributes] = useState('')
-  const [selectedAoiIds, setSelectedAoiIds] = useState<string[]>(
-    () => DEFAULT_GLOBAL_FILTER_SNAPSHOT.selectedAoiIds,
+  const [selectedRegionIds, setSelectedRegionIds] = useState<string[]>(
+    () => DEFAULT_GLOBAL_FILTER_SNAPSHOT.selectedRegionIds,
+  )
+  const [selectedPostcodeAreaIds, setSelectedPostcodeAreaIds] = useState<string[]>(
+    () => DEFAULT_GLOBAL_FILTER_SNAPSHOT.selectedPostcodeAreaIds,
   )
 
   const [filterPresets, setFilterPresets] = useState<SavedFilterPreset[]>(() =>
@@ -568,7 +575,8 @@ export function OperatorDashboard() {
       service,
       networkMode,
       subscriberType,
-      selectedAoiIds,
+      selectedRegionIds,
+      selectedPostcodeAreaIds,
     }),
     [
       timeRange,
@@ -577,7 +585,8 @@ export function OperatorDashboard() {
       service,
       networkMode,
       subscriberType,
-      selectedAoiIds,
+      selectedRegionIds,
+      selectedPostcodeAreaIds,
     ],
   )
 
@@ -587,9 +596,9 @@ export function OperatorDashboard() {
   )
 
   useEffect(() => {
-    const aoi = unionCellIdsForAoiSelection(selectedAoiIds)
-    if (!aoi?.size) return
-    if (selectedCellId && !aoi.has(selectedCellId)) {
+    const geo = unionCellIdsForGeoSelection(selectedRegionIds, selectedPostcodeAreaIds)
+    if (geo === null) return
+    if (selectedCellId && !geo.has(selectedCellId)) {
       setSelectedCellId(null)
       setSelectedImsi(null)
       setTableImsiSearch('')
@@ -601,7 +610,7 @@ export function OperatorDashboard() {
     }
     if (selectedImsi) {
       const anchor = SUBSCRIBERS.find((s) => s.imsi === selectedImsi)?.cellId
-      if (anchor && !aoi.has(anchor)) {
+      if (anchor && !geo.has(anchor)) {
         setSelectedImsi(null)
         setTableImsiSearch('')
         setSessionCellFilter(null)
@@ -611,7 +620,7 @@ export function OperatorDashboard() {
         setView('cells')
       }
     }
-  }, [selectedAoiIds, selectedCellId, selectedImsi])
+  }, [selectedRegionIds, selectedPostcodeAreaIds, selectedCellId, selectedImsi])
 
   const visibleRanked = useMemo(() => {
     const q = cellAttributes.trim().toLowerCase()
@@ -1037,7 +1046,8 @@ export function OperatorDashboard() {
       networkMode,
       subscriberType,
       cellAttributes,
-      selectedAoiIds,
+      selectedRegionIds,
+      selectedPostcodeAreaIds,
       selectedKpiId,
     }
   }
@@ -1053,7 +1063,8 @@ export function OperatorDashboard() {
     setNetworkMode(filters.networkMode)
     setSubscriberType(filters.subscriberType)
     setCellAttributes(filters.cellAttributes)
-    setSelectedAoiIds(normalizeAoiSelection(filters.selectedAoiIds))
+    setSelectedRegionIds(normalizeRegionSelection(filters.selectedRegionIds))
+    setSelectedPostcodeAreaIds(normalizePostcodeSelection(filters.selectedPostcodeAreaIds))
   }
 
   function handleSavePreset(name: string) {
@@ -1099,8 +1110,10 @@ export function OperatorDashboard() {
         onNetworkMode={setNetworkMode}
         cellAttributes={cellAttributes}
         onCellAttributes={setCellAttributes}
-        selectedAoiIds={selectedAoiIds}
-        onSelectedAoiIds={setSelectedAoiIds}
+        selectedRegionIds={selectedRegionIds}
+        onSelectedRegionIds={setSelectedRegionIds}
+        selectedPostcodeAreaIds={selectedPostcodeAreaIds}
+        onSelectedPostcodeAreaIds={setSelectedPostcodeAreaIds}
         selectedKpiId={selectedKpiId}
         onSelectedKpiId={setSelectedKpiId}
         presets={filterPresets}

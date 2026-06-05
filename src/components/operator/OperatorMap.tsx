@@ -23,7 +23,7 @@ import {
   type SessionRow,
   type SubscriberGlobalFilters,
 } from '../../data/placeholderNetwork'
-import { unionCellIdsForAoiSelection } from '../../data/operatorAois'
+import { unionCellIdsForGeoSelection } from '../../data/operatorGeoFilters'
 import { sessionKpiBand, type KpiId } from '../../data/kpis'
 
 type MapMode = 'all' | 'cellFocus' | 'subscriberFocus'
@@ -69,11 +69,14 @@ export const MAP_PERFORMANCE_COLORS = {
 } as const
 
 const MAP_BOUNDS = {
-  west: -0.255,
-  east: -0.08,
-  south: 51.48,
-  north: 51.54,
+  west: -0.28,
+  east: -0.065,
+  south: 51.465,
+  north: 51.555,
 }
+
+/** Cap activity-cloud points per period so the map stays smooth as subscriber count grows. */
+const MAX_ACTIVITY_CLOUD_PIXELS = 7200
 
 const MAPBOX_FALLBACK_ACCESS_TOKEN = ''
 
@@ -776,6 +779,44 @@ function makeSessionJourneyPoints(
   return features
 }
 
+/**
+ * Stratified subsample by serving cell so each sector keeps representation on the map
+ * while total features stay bounded (tables/analytics still use the full cohort).
+ */
+function subsampleSubscribersForActivityCloud(
+  subscribers: typeof SUBSCRIBERS,
+  maxTotal: number,
+): typeof SUBSCRIBERS {
+  if (subscribers.length <= maxTotal || maxTotal <= 0) return subscribers
+  const byCell = new Map<string, (typeof SUBSCRIBERS)[number][]>()
+  for (const s of subscribers) {
+    const list = byCell.get(s.cellId)
+    if (list) list.push(s)
+    else byCell.set(s.cellId, [s])
+  }
+  const cellIds = [...byCell.keys()].sort()
+  const nCells = cellIds.length
+  const out: typeof SUBSCRIBERS = []
+  for (let i = 0; i < nCells; i++) {
+    const cid = cellIds[i]
+    const list = byCell.get(cid)!
+    const cellsLeft = nCells - i
+    const budget = maxTotal - out.length
+    const quota = Math.max(1, Math.floor(budget / cellsLeft))
+    const take = Math.min(list.length, quota)
+    if (take === list.length) {
+      out.push(...list)
+    } else {
+      const stride = list.length / take
+      for (let j = 0; j < take; j++) {
+        const idx = Math.min(list.length - 1, Math.floor(j * stride + stride * 0.5))
+        out.push(list[idx])
+      }
+    }
+  }
+  return out
+}
+
 function makeActivityCloud(
   subscribers: typeof SUBSCRIBERS,
   selectedKpiId: KpiId,
@@ -945,9 +986,13 @@ export function OperatorMap({
     [subscriberImsi],
   )
 
-  const aoiCellSet = useMemo(
-    () => unionCellIdsForAoiSelection(filters.selectedAoiIds ?? []),
-    [filters.selectedAoiIds],
+  const geoCellSet = useMemo(
+    () =>
+      unionCellIdsForGeoSelection(
+        filters.selectedRegionIds ?? [],
+        filters.selectedPostcodeAreaIds ?? [],
+      ),
+    [filters.selectedRegionIds, filters.selectedPostcodeAreaIds],
   )
 
   const fitIds = useMemo(() => {
@@ -956,16 +1001,16 @@ export function OperatorMap({
     else if (mode === 'cellFocus' && selectedCellId) base = neighborSet(selectedCellId)
     else if (mode === 'subscriberFocus' && all.size) base = all
     else base = new Set(CELLS.map((c) => c.id))
-    if (!aoiCellSet?.size) return base
+    if (geoCellSet === null) return base
     const inter = new Set<string>()
-    for (const id of base) if (aoiCellSet.has(id)) inter.add(id)
+    for (const id of base) if (geoCellSet.has(id)) inter.add(id)
     return inter.size > 0 ? inter : base
-  }, [mode, selectedCellId, all, aoiCellSet])
+  }, [mode, selectedCellId, all, geoCellSet])
 
   const cellsForMap = useMemo(() => {
-    if (!aoiCellSet?.size) return CELLS
-    return CELLS.filter((c) => aoiCellSet.has(c.id))
-  }, [aoiCellSet])
+    if (geoCellSet === null) return CELLS
+    return CELLS.filter((c) => geoCellSet.has(c.id))
+  }, [geoCellSet])
 
   const cellCollection = useMemo<FeatureCollection<Polygon, CellFeatureProps>>(() => {
     const features: Feature<Polygon, CellFeatureProps>[] = cellsForMap.map((c) => {
@@ -1054,10 +1099,11 @@ export function OperatorMap({
       mode === 'cellFocus' && selectedCellId
         ? baseSubs.filter((s) => neighborSet(selectedCellId).has(s.cellId))
         : baseSubs
-    const featuresA = makeActivityCloud(scoped, selectedKpiId, 'A', selectedSessionIdSet)
+    const cloudSubs = subsampleSubscribersForActivityCloud(scoped, MAX_ACTIVITY_CLOUD_PIXELS)
+    const featuresA = makeActivityCloud(cloudSubs, selectedKpiId, 'A', selectedSessionIdSet)
     const features = showPeriodBOverlay
       ? featuresA.concat(
-          makeActivityCloud(scoped, selectedKpiId, 'B', selectedSessionIdSet),
+          makeActivityCloud(cloudSubs, selectedKpiId, 'B', selectedSessionIdSet),
         )
       : featuresA
     return { type: 'FeatureCollection', features }

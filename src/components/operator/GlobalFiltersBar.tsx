@@ -4,7 +4,7 @@ import {
   type SavedFilterPreset,
 } from '../../utils/filterPresets'
 import { groupedKpiDefinitions, type KpiId } from '../../data/kpis'
-import { OPERATOR_AOIS } from '../../data/operatorAois'
+import { OPERATOR_REGIONS, OPERATOR_UNIT_POSTCODES } from '../../data/operatorGeoFilters'
 
 type Props = {
   timeRange: string
@@ -21,8 +21,10 @@ type Props = {
   onNetworkMode: (v: 'all' | 'sa' | 'nsa') => void
   cellAttributes: string
   onCellAttributes: (v: string) => void
-  selectedAoiIds: string[]
-  onSelectedAoiIds: (v: string[]) => void
+  selectedRegionIds: string[]
+  onSelectedRegionIds: (v: string[]) => void
+  selectedPostcodeAreaIds: string[]
+  onSelectedPostcodeAreaIds: (v: string[]) => void
   selectedKpiId: KpiId
   onSelectedKpiId: (v: KpiId) => void
   presets: SavedFilterPreset[]
@@ -53,8 +55,10 @@ export function GlobalFiltersBar({
   onNetworkMode,
   cellAttributes,
   onCellAttributes,
-  selectedAoiIds,
-  onSelectedAoiIds,
+  selectedRegionIds,
+  onSelectedRegionIds,
+  selectedPostcodeAreaIds,
+  onSelectedPostcodeAreaIds,
   selectedKpiId,
   onSelectedKpiId,
   presets,
@@ -65,14 +69,17 @@ export function GlobalFiltersBar({
   const [presetSelection, setPresetSelection] = useState('')
   const [secondaryFilterMenuOpen, setSecondaryFilterMenuOpen] = useState(false)
   const [presetMenuOpen, setPresetMenuOpen] = useState(false)
-  const [aoiMenuOpen, setAoiMenuOpen] = useState(false)
+  const [regionMenuOpen, setRegionMenuOpen] = useState(false)
+  const [postcodeMenuOpen, setPostcodeMenuOpen] = useState(false)
+  const [postcodeSearch, setPostcodeSearch] = useState('')
   const [showSecondaryFilters, setShowSecondaryFilters] = useState<Record<SecondaryFilterKey, boolean>>({
     cellAttributes: false,
     aoi: false,
   })
   const secondaryMenuRef = useRef<HTMLDivElement | null>(null)
   const presetMenuRef = useRef<HTMLDivElement | null>(null)
-  const aoiMenuRef = useRef<HTMLDivElement | null>(null)
+  const regionMenuRef = useRef<HTMLDivElement | null>(null)
+  const postcodeMenuRef = useRef<HTMLDivElement | null>(null)
   const kpiGroups = groupedKpiDefinitions()
   const defaultKpiId = DEFAULT_GLOBAL_FILTER_SNAPSHOT.selectedKpiId
   const saActive = networkMode !== 'nsa'
@@ -80,14 +87,37 @@ export function GlobalFiltersBar({
   const subscriberSelectionCount = subscriberType === 'all' ? 0 : 1
   const serviceSelectionCount = service === 'all' ? 0 : 1
   const isCustomKpi = selectedKpiId !== defaultKpiId
-  const aoiSummaryLabel = useMemo(() => {
-    if (selectedAoiIds.length === 0) return 'All areas'
-    if (selectedAoiIds.length === 1) {
-      return OPERATOR_AOIS.find((a) => a.id === selectedAoiIds[0])?.label ?? '1 area'
+  const regionSummaryLabel = useMemo(() => {
+    if (selectedRegionIds.length === 0) return 'All regions'
+    if (selectedRegionIds.length === 1) {
+      return OPERATOR_REGIONS.find((r) => r.id === selectedRegionIds[0])?.label ?? '1 region'
     }
-    return `${selectedAoiIds.length} areas`
-  }, [selectedAoiIds])
-  const aoiSelectionCount = selectedAoiIds.length
+    return `${selectedRegionIds.length} regions`
+  }, [selectedRegionIds])
+
+  const postcodeSummaryLabel = useMemo(() => {
+    if (selectedPostcodeAreaIds.length === 0) return 'All postcodes'
+    if (selectedPostcodeAreaIds.length === 1) {
+      return (
+        OPERATOR_UNIT_POSTCODES.find((p) => p.id === selectedPostcodeAreaIds[0])?.label ?? '1 postcode'
+      )
+    }
+    return `${selectedPostcodeAreaIds.length} postcodes`
+  }, [selectedPostcodeAreaIds])
+
+  const regionSelectionCount = selectedRegionIds.length
+  const postcodeSelectionCount = selectedPostcodeAreaIds.length
+
+  const filteredUnitPostcodes = useMemo(() => {
+    const q = postcodeSearch.trim().toLowerCase()
+    if (!q) return [...OPERATOR_UNIT_POSTCODES]
+    return OPERATOR_UNIT_POSTCODES.filter(
+      (p) =>
+        p.label.toLowerCase().includes(q) ||
+        p.hint.toLowerCase().includes(q) ||
+        p.id.toLowerCase().includes(q),
+    )
+  }, [postcodeSearch])
   const enabledSecondaryFilterCount = useMemo(
     () => SECONDARY_FILTERS.filter((item) => showSecondaryFilters[item.key]).length,
     [showSecondaryFilters],
@@ -102,28 +132,32 @@ export function GlobalFiltersBar({
       if (presetMenuRef.current && target && !presetMenuRef.current.contains(target)) {
         setPresetMenuOpen(false)
       }
-      if (aoiMenuRef.current && target && !aoiMenuRef.current.contains(target)) {
-        setAoiMenuOpen(false)
+      if (regionMenuRef.current && target && !regionMenuRef.current.contains(target)) {
+        setRegionMenuOpen(false)
+      }
+      if (postcodeMenuRef.current && target && !postcodeMenuRef.current.contains(target)) {
+        setPostcodeMenuOpen(false)
       }
     }
 
-    if (!secondaryFilterMenuOpen && !presetMenuOpen && !aoiMenuOpen) return
+    if (!secondaryFilterMenuOpen && !presetMenuOpen && !regionMenuOpen && !postcodeMenuOpen) return
     window.addEventListener('mousedown', handleClickOutside)
     return () => window.removeEventListener('mousedown', handleClickOutside)
-  }, [secondaryFilterMenuOpen, presetMenuOpen, aoiMenuOpen])
+  }, [secondaryFilterMenuOpen, presetMenuOpen, regionMenuOpen, postcodeMenuOpen])
 
   useEffect(() => {
     function handleEscape(event: KeyboardEvent) {
       if (event.key !== 'Escape') return
       setSecondaryFilterMenuOpen(false)
       setPresetMenuOpen(false)
-      setAoiMenuOpen(false)
+      setRegionMenuOpen(false)
+      setPostcodeMenuOpen(false)
     }
 
-    if (!secondaryFilterMenuOpen && !presetMenuOpen && !aoiMenuOpen) return
+    if (!secondaryFilterMenuOpen && !presetMenuOpen && !regionMenuOpen && !postcodeMenuOpen) return
     window.addEventListener('keydown', handleEscape)
     return () => window.removeEventListener('keydown', handleEscape)
-  }, [secondaryFilterMenuOpen, presetMenuOpen, aoiMenuOpen])
+  }, [secondaryFilterMenuOpen, presetMenuOpen, regionMenuOpen, postcodeMenuOpen])
 
   useEffect(() => {
     if (cellAttributes.trim()) {
@@ -134,10 +168,14 @@ export function GlobalFiltersBar({
   }, [cellAttributes])
 
   useEffect(() => {
-    if (selectedAoiIds.length > 0) {
+    if (selectedRegionIds.length > 0 || selectedPostcodeAreaIds.length > 0) {
       setShowSecondaryFilters((prev) => (prev.aoi ? prev : { ...prev, aoi: true }))
     }
-  }, [selectedAoiIds.length])
+  }, [selectedRegionIds.length, selectedPostcodeAreaIds.length])
+
+  useEffect(() => {
+    if (!postcodeMenuOpen) setPostcodeSearch('')
+  }, [postcodeMenuOpen])
 
   function toggleSaMode() {
     if (saActive && nsaActive) {
@@ -172,11 +210,13 @@ export function GlobalFiltersBar({
     onNetworkMode(DEFAULT_GLOBAL_FILTER_SNAPSHOT.networkMode)
     onSelectedKpiId(DEFAULT_GLOBAL_FILTER_SNAPSHOT.selectedKpiId)
     onCellAttributes(DEFAULT_GLOBAL_FILTER_SNAPSHOT.cellAttributes)
-    onSelectedAoiIds(DEFAULT_GLOBAL_FILTER_SNAPSHOT.selectedAoiIds)
+    onSelectedRegionIds(DEFAULT_GLOBAL_FILTER_SNAPSHOT.selectedRegionIds)
+    onSelectedPostcodeAreaIds(DEFAULT_GLOBAL_FILTER_SNAPSHOT.selectedPostcodeAreaIds)
     setShowSecondaryFilters({ cellAttributes: false, aoi: false })
     setSecondaryFilterMenuOpen(false)
     setPresetMenuOpen(false)
-    setAoiMenuOpen(false)
+    setRegionMenuOpen(false)
+    setPostcodeMenuOpen(false)
   }
 
   function savePresetFromIcon() {
@@ -301,80 +341,6 @@ export function GlobalFiltersBar({
                     )}
                   </div>
                 </label>
-                {/* Optional filters from ⊕ render after core chips so new filters stack at the end. */}
-                {showSecondaryFilters.aoi && (
-                  <div className="filter-chip filter-chip-aoi filter-chip-menu-wrap" ref={aoiMenuRef}>
-                    <span>AOI</span>
-                    <div className="filter-chip-control">
-                      <button
-                        type="button"
-                        className={`filter-chip-aoi-trigger${aoiMenuOpen ? ' filter-chip-aoi-trigger-open' : ''}`}
-                        aria-haspopup="listbox"
-                        aria-expanded={aoiMenuOpen}
-                        aria-label="Area of interest filter"
-                        title="Areas of interest (subset of network footprint)"
-                        onClick={() => {
-                          setAoiMenuOpen((prev) => !prev)
-                          setSecondaryFilterMenuOpen(false)
-                          setPresetMenuOpen(false)
-                        }}
-                      >
-                        {aoiSummaryLabel}
-                      </button>
-                      {aoiSelectionCount > 0 && (
-                        <span className="filter-chip-badge" aria-label="Selected AOI count">
-                          {aoiSelectionCount}
-                        </span>
-                      )}
-                      {aoiSelectionCount > 0 && (
-                        <button
-                          type="button"
-                          className="filter-chip-clear"
-                          aria-label="Clear AOI selections"
-                          onClick={() => onSelectedAoiIds([])}
-                        >
-                          ×
-                        </button>
-                      )}
-                      {aoiMenuOpen && (
-                        <div
-                          className="filters-dropdown-menu filters-dropdown-menu-aoi"
-                          role="listbox"
-                          aria-label="Choose areas of interest"
-                          aria-multiselectable="true"
-                        >
-                          <p className="filters-dropdown-heading">Areas of interest</p>
-                          {OPERATOR_AOIS.map((aoi) => {
-                            const checked = selectedAoiIds.includes(aoi.id)
-                            return (
-                              <label key={aoi.id} className="filters-dropdown-check">
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() => {
-                                    if (checked) {
-                                      onSelectedAoiIds(selectedAoiIds.filter((id) => id !== aoi.id))
-                                    } else {
-                                      onSelectedAoiIds([...selectedAoiIds, aoi.id])
-                                    }
-                                  }}
-                                />
-                                <span title={aoi.hint}>{aoi.label}</span>
-                              </label>
-                            )
-                          })}
-                          <button
-                            type="button"
-                            className="filters-dropdown-action"
-                            onClick={() => onSelectedAoiIds([])}
-                          >
-                            Clear all areas
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
               </div>
               <div className="filters-icon-cluster" role="group" aria-label="Global filter actions">
                 <div className="filters-icon-menu-wrap" ref={secondaryMenuRef}>
@@ -388,7 +354,8 @@ export function GlobalFiltersBar({
                     onClick={() => {
                       setSecondaryFilterMenuOpen((prev) => !prev)
                       setPresetMenuOpen(false)
-                      setAoiMenuOpen(false)
+                      setRegionMenuOpen(false)
+                      setPostcodeMenuOpen(false)
                     }}
                   >
                     <span aria-hidden="true" className="preset-icon-glyph">
@@ -418,7 +385,10 @@ export function GlobalFiltersBar({
                                 [item.key]: checked,
                               }))
                               if (!checked && item.key === 'cellAttributes') onCellAttributes('')
-                              if (!checked && item.key === 'aoi') onSelectedAoiIds([])
+                              if (!checked && item.key === 'aoi') {
+                                onSelectedRegionIds([])
+                                onSelectedPostcodeAreaIds([])
+                              }
                             }}
                           />
                           <span className={item.key === 'aoi' ? 'filters-label-acronym' : undefined}>
@@ -462,7 +432,8 @@ export function GlobalFiltersBar({
                     onClick={() => {
                       setPresetMenuOpen((prev) => !prev)
                       setSecondaryFilterMenuOpen(false)
-                      setAoiMenuOpen(false)
+                      setRegionMenuOpen(false)
+                      setPostcodeMenuOpen(false)
                     }}
                   >
                     <span aria-hidden="true" className="preset-icon-glyph">
@@ -534,6 +505,175 @@ export function GlobalFiltersBar({
                 </div>
               </div>
             </div>
+            {showSecondaryFilters.aoi && (
+              <div
+                className="filters-chip-row filters-chip-row-optional-filters"
+                aria-label="AOI geography filters"
+              >
+                <div className="filter-chip filter-chip-geo filter-chip-menu-wrap" ref={regionMenuRef}>
+                  <span>Region</span>
+                  <div className="filter-chip-control">
+                    <button
+                      type="button"
+                      className={`filter-chip-aoi-trigger${regionMenuOpen ? ' filter-chip-aoi-trigger-open' : ''}`}
+                      aria-haspopup="listbox"
+                      aria-expanded={regionMenuOpen}
+                      aria-label="Region filter"
+                      title="UK administrative region"
+                      onClick={() => {
+                        setRegionMenuOpen((prev) => !prev)
+                        setPostcodeMenuOpen(false)
+                        setSecondaryFilterMenuOpen(false)
+                        setPresetMenuOpen(false)
+                      }}
+                    >
+                      <span className="filters-label-acronym">{regionSummaryLabel}</span>
+                    </button>
+                    {regionSelectionCount > 0 && (
+                      <span className="filter-chip-badge" aria-label="Selected region count">
+                        {regionSelectionCount}
+                      </span>
+                    )}
+                    {regionSelectionCount > 0 && (
+                      <button
+                        type="button"
+                        className="filter-chip-clear"
+                        aria-label="Clear region selections"
+                        onClick={() => onSelectedRegionIds([])}
+                      >
+                        ×
+                      </button>
+                    )}
+                    {regionMenuOpen && (
+                      <div
+                        className="filters-dropdown-menu filters-dropdown-menu-aoi"
+                        role="listbox"
+                        aria-label="Choose regions"
+                        aria-multiselectable="true"
+                      >
+                        <p className="filters-dropdown-heading">Region</p>
+                        {OPERATOR_REGIONS.map((r) => {
+                          const checked = selectedRegionIds.includes(r.id)
+                          return (
+                            <label key={r.id} className="filters-dropdown-check">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => {
+                                  if (checked) {
+                                    onSelectedRegionIds(selectedRegionIds.filter((id) => id !== r.id))
+                                  } else {
+                                    onSelectedRegionIds([...selectedRegionIds, r.id])
+                                  }
+                                }}
+                              />
+                              <span className="filters-label-acronym">{r.label}</span>
+                            </label>
+                          )
+                        })}
+                        <button
+                          type="button"
+                          className="filters-dropdown-action"
+                          onClick={() => onSelectedRegionIds([])}
+                        >
+                          Clear all regions
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="filter-chip filter-chip-geo filter-chip-menu-wrap" ref={postcodeMenuRef}>
+                  <span>Postcode</span>
+                  <div className="filter-chip-control">
+                    <button
+                      type="button"
+                      className={`filter-chip-aoi-trigger${postcodeMenuOpen ? ' filter-chip-aoi-trigger-open' : ''}`}
+                      aria-haspopup="listbox"
+                      aria-expanded={postcodeMenuOpen}
+                      aria-label="Postcode filter"
+                      title="London unit postcode (e.g. E1 6AN)"
+                      onClick={() => {
+                        setPostcodeMenuOpen((prev) => !prev)
+                        setRegionMenuOpen(false)
+                        setSecondaryFilterMenuOpen(false)
+                        setPresetMenuOpen(false)
+                      }}
+                    >
+                      <span className="filters-label-acronym">{postcodeSummaryLabel}</span>
+                    </button>
+                    {postcodeSelectionCount > 0 && (
+                      <span className="filter-chip-badge" aria-label="Selected postcode count">
+                        {postcodeSelectionCount}
+                      </span>
+                    )}
+                    {postcodeSelectionCount > 0 && (
+                      <button
+                        type="button"
+                        className="filter-chip-clear"
+                        aria-label="Clear postcode selections"
+                        onClick={() => onSelectedPostcodeAreaIds([])}
+                      >
+                        ×
+                      </button>
+                    )}
+                    {postcodeMenuOpen && (
+                      <div
+                        className="filters-dropdown-menu filters-dropdown-menu-aoi filters-dropdown-menu-postcodes"
+                        role="listbox"
+                        aria-label="Choose unit postcodes"
+                        aria-multiselectable="true"
+                      >
+                        <p className="filters-dropdown-heading">Postcode</p>
+                        <input
+                          type="search"
+                          className="filters-dropdown-search"
+                          placeholder="Search e.g. NW1, E1 6AN, WC2"
+                          value={postcodeSearch}
+                          onChange={(e) => setPostcodeSearch(e.target.value)}
+                          aria-label="Search postcodes"
+                        />
+                        <div className="filters-dropdown-postcode-scroll">
+                          {filteredUnitPostcodes.length === 0 ? (
+                            <p className="filters-dropdown-empty">No matches</p>
+                          ) : (
+                            filteredUnitPostcodes.map((p) => {
+                              const checked = selectedPostcodeAreaIds.includes(p.id)
+                              return (
+                                <label key={p.id} className="filters-dropdown-check">
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => {
+                                      if (checked) {
+                                        onSelectedPostcodeAreaIds(
+                                          selectedPostcodeAreaIds.filter((id) => id !== p.id),
+                                        )
+                                      } else {
+                                        onSelectedPostcodeAreaIds([...selectedPostcodeAreaIds, p.id])
+                                      }
+                                    }}
+                                  />
+                                  <span className="filters-label-acronym" title={p.hint}>
+                                    {p.label}
+                                  </span>
+                                </label>
+                              )
+                            })
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          className="filters-dropdown-action"
+                          onClick={() => onSelectedPostcodeAreaIds([])}
+                        >
+                          Clear all postcodes
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
             {showSecondaryFilters.cellAttributes && (
               <div className="filters-chip-row filters-chip-row-secondary" aria-label="Secondary global filter chips">
                 <label className="filter-chip filter-chip-secondary">
